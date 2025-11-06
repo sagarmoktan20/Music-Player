@@ -7,5 +7,6 @@ data class Song(
     val title: String,
     val artist: String,
     val durationMs: Long,
-    val contentUri: Uri
+    val contentUri: Uri,
+    val isFavourite: Boolean = false
 )
