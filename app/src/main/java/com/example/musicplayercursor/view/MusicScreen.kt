@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -24,7 +23,6 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
-import androidx.compose.material3.Button
 import androidx.compose.material3.Divider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -55,6 +53,7 @@ import com.example.musicplayercursor.viewmodel.MusicViewModel
 import com.example.musicplayercursor.viewmodel.PermissionViewModel
 import kotlinx.coroutines.launch
 import com.example.musicplayercursor.R   // <-- replace with your actual package name
+import com.example.musicplayercursor.view.PlaylistScreens.PlaylistsScreen
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -151,7 +150,10 @@ fun MusicScreen(
 
 						1 -> {
 							// Playlists screen (already implemented elsewhere)
-							PlaylistsScreen()
+							PlaylistsScreen(
+								songs = uiState.songs,
+								onPlay = { onPlay(it) }
+							)
 						}
 
 						else -> {

@@ -12,7 +12,9 @@ class MusicRepository( private val contentResolver: ContentResolver) {
             MediaStore.Audio.Media._ID,
             MediaStore.Audio.Media.TITLE,
             MediaStore.Audio.Media.ARTIST,
-            MediaStore.Audio.Media.DURATION
+            MediaStore.Audio.Media.DURATION,
+            MediaStore.Audio.Media.DATE_ADDED
+
         )
         val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0"
         val sortOrder = "${MediaStore.Audio.Media.DATE_ADDED} DESC"
@@ -22,13 +24,16 @@ class MusicRepository( private val contentResolver: ContentResolver) {
             val titleCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
             val artistCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
             val durationCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
+            val dateAddedCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DATE_ADDED)
+
             while (cursor.moveToNext()) {
                 val id = cursor.getLong(idCol)
                 val title = cursor.getString(titleCol) ?: "Unknown Title"
                 val artist = cursor.getString(artistCol) ?: "Unknown Artist"
                 val duration = cursor.getLong(durationCol)
+                val dateAdded = cursor.getLong(dateAddedCol)
                 val contentUri = Uri.withAppendedPath(collection, id.toString())
-                results.add(Song(id, title, artist, duration, contentUri))
+                results.add(Song(id, title, artist, duration, contentUri, dateAdded = dateAdded))
             }
         }
         return results

@@ -1,6 +1,11 @@
 package com.example.musicplayercursor.viewmodel
 
 import android.content.Context
+import android.database.ContentObserver
+import android.net.Uri
+import android.os.Handler
+import android.os.Looper
+import android.provider.MediaStore
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.AudioAttributes
@@ -9,6 +14,8 @@ import androidx.media3.exoplayer.ExoPlayer
 import com.example.musicplayercursor.model.Song
 import com.example.musicplayercursor.repository.FavouritesRepository
 import com.example.musicplayercursor.repository.MusicRepository
+import com.example.musicplayercursor.repository.PlayCountRepository
+import com.example.musicplayercursor.repository.LastPlayedRepository
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -28,32 +35,88 @@ class MusicViewModel: ViewModel() {
     private var player: ExoPlayer? = null
     private var progressUpdateJob: Job? = null
     private var favouritesRepository: FavouritesRepository? = null
+    private var playCountRepository: PlayCountRepository? = null
+    private var lastPlayedRepository: LastPlayedRepository? = null
+    private var contentObserver: ContentObserver? = null
+    private var contentResolver: android.content.ContentResolver? = null
+    private var applicationContext: Context? = null
     private val _uiState = MutableStateFlow(MusicUiState())
     val uiState: StateFlow<MusicUiState> = _uiState
+    
+    // Handler for ContentObserver (runs on main thread)
+    private val handler = Handler(Looper.getMainLooper())
+    
+    // Debounce mechanism to avoid multiple rapid reloads
+    private var reloadJob: Job? = null
 
     fun loadSongs(context: Context) {
+        // Store content resolver reference for ContentObserver
+        if (contentResolver == null) {
+            applicationContext = context.applicationContext
+            contentResolver = applicationContext?.contentResolver
+            registerMediaStoreObserver()
+        }
+        
         viewModelScope.launch {
             favouritesRepository = FavouritesRepository(context)
+            playCountRepository = PlayCountRepository(context)
+            lastPlayedRepository = LastPlayedRepository(context)
             val repo = MusicRepository(context.contentResolver)
             val loadedSongs = repo.loadAudio()
             val favouriteIds = favouritesRepository?.getFavouriteSongIds() ?: emptySet()
+            val playCounts = playCountRepository?.getAllPlayCounts() ?: emptyMap()
+            val lastPlayedMap = lastPlayedRepository?.getAllLastPlayed() ?: emptyMap()
             
-            // Mark songs as favourite based on SharedPreferences
-            val songsWithFavourites = loadedSongs.map { song ->
-                song.copy(isFavourite = favouriteIds.contains(song.id))
+            // Mark songs as favourite and add play counts based on SharedPreferences
+            val songsWithFavouritesAndCounts = loadedSongs.map { song ->
+                song.copy(
+                    isFavourite = favouriteIds.contains(song.id),
+                    playCount = playCounts[song.id] ?: 0,
+                    lastPlayed = lastPlayedMap[song.id] ?: 0L
+                )
             }
             
-            // Update current song's favourite status if it exists
+            // Update current song's favourite status and play count if it exists
             val currentSong = _uiState.value.current
             val updatedCurrent = if (currentSong != null) {
-                currentSong.copy(isFavourite = favouriteIds.contains(currentSong.id))
+                val currentPlayCount = playCounts[currentSong.id] ?: currentSong.playCount
+                val currentLastPlayed = lastPlayedMap[currentSong.id] ?: currentSong.lastPlayed
+                currentSong.copy(
+                    isFavourite = favouriteIds.contains(currentSong.id),
+                    playCount = currentPlayCount,
+                    lastPlayed = currentLastPlayed
+                )
             } else null
             
             _uiState.value = _uiState.value.copy(
-                songs = songsWithFavourites,
+                songs = songsWithFavouritesAndCounts,
                 current = updatedCurrent
             )
         }
+    }
+    
+    private fun registerMediaStoreObserver() {
+        val resolver = contentResolver ?: return
+        val context = applicationContext ?: return
+        
+        contentObserver = object : ContentObserver(handler) {
+            override fun onChange(selfChange: Boolean, uri: Uri?) {
+                super.onChange(selfChange, uri)
+                // Debounce: cancel previous reload job and start a new one after a short delay
+                reloadJob?.cancel()
+                reloadJob = viewModelScope.launch {
+                    delay(500) // Wait 500ms to batch multiple rapid changes
+                    loadSongs(context)
+                }
+            }
+        }
+        
+        // Register observer for MediaStore audio changes
+        resolver.registerContentObserver(
+            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+            true, // notifyForDescendants - also watch sub-URIs
+            contentObserver!!
+        )
     }
 
     fun preparePlayer(context: Context) {
@@ -70,12 +133,37 @@ class MusicViewModel: ViewModel() {
         preparePlayer(context)
         val p = player ?: return
         
-        // Get the favourite status from the song list or current song
-        val favouriteStatus = _uiState.value.songs.find { it.id == song.id }?.isFavourite 
+        // Initialize repositories if needed
+        if (playCountRepository == null) {
+            playCountRepository = PlayCountRepository(context)
+        }
+        if (lastPlayedRepository == null) {
+            lastPlayedRepository = LastPlayedRepository(context)
+        }
+        
+        // Increment play count
+        playCountRepository?.incrementPlayCount(song.id)
+        // Update last played timestamp
+        val now = System.currentTimeMillis()
+        lastPlayedRepository?.setLastPlayed(song.id, now)
+        
+        // Get the favourite status and updated play count from the song list or current song
+        val existingSong = _uiState.value.songs.find { it.id == song.id }
+        val favouriteStatus = existingSong?.isFavourite 
             ?: _uiState.value.current?.isFavourite 
             ?: song.isFavourite
+        val updatedPlayCount = (existingSong?.playCount ?: song.playCount) + 1
         
-        val songWithFavouriteStatus = song.copy(isFavourite = favouriteStatus)
+        val songWithStatus = song.copy(
+            isFavourite = favouriteStatus,
+            playCount = updatedPlayCount,
+            lastPlayed = now
+        )
+        
+        // Update the song in the list with new play count
+        val updatedSongs = _uiState.value.songs.map {
+            if (it.id == song.id) it.copy(playCount = updatedPlayCount, lastPlayed = now) else it
+        }
         
         p.stop()
         p.clearMediaItems()
@@ -83,7 +171,8 @@ class MusicViewModel: ViewModel() {
         p.prepare()
         p.play()
         _uiState.value = _uiState.value.copy(
-            current = songWithFavouriteStatus,
+            songs = updatedSongs,
+            current = songWithStatus,
             isPlaying = true,
             currentPosition = 0L,
             duration = p.duration.coerceAtLeast(0L)
@@ -141,14 +230,14 @@ class MusicViewModel: ViewModel() {
                 repo.removeFavourite(song.id)
             }
             
-            // Update the song in the list
+            // Update the song in the list (preserve play count)
             val updatedSongs = _uiState.value.songs.map {
                 if (it.id == song.id) it.copy(isFavourite = newFavouriteStatus) else it
             }
             
-            // Update current song if it's the one being toggled
+            // Update current song if it's the one being toggled (preserve play count)
             val updatedCurrent = if (_uiState.value.current?.id == song.id) {
-                song.copy(isFavourite = newFavouriteStatus)
+                _uiState.value.current?.copy(isFavourite = newFavouriteStatus)
             } else {
                 _uiState.value.current
             }
@@ -181,6 +270,16 @@ class MusicViewModel: ViewModel() {
     override fun onCleared() {
         super.onCleared()
         progressUpdateJob?.cancel()
+        reloadJob?.cancel()
+        
+        // Unregister ContentObserver
+        contentObserver?.let { observer ->
+            contentResolver?.unregisterContentObserver(observer)
+        }
+        contentObserver = null
+        contentResolver = null
+        applicationContext = null
+        
         player?.release()
         player = null
     }
