@@ -1,6 +1,7 @@
 package com.example.musicplayercursor.view.PlaylistScreens
 
-    import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -11,6 +12,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material3.Divider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -28,7 +32,11 @@ import com.example.musicplayercursor.model.Song
 @Composable
 fun MostPlayed(
     songs: List<Song>,
-    onPlay: (Song) -> Unit
+    isSelectionMode: Boolean,
+    selectedSongs: Set<Long>,
+    onPlay: (Song) -> Unit,
+    onLongPress: (Song) -> Unit,
+    onToggleSelection: (Long) -> Unit
 ) {
     // Filter songs with playCount > 0, sort by playCount descending, take top 100
     val mostPlayedSongs = songs
@@ -53,46 +61,81 @@ fun MostPlayed(
             }
         } else {
             items(mostPlayedSongs, key = { it.id }) { song ->
-                MostPlayedSongRow(song = song, onPlay = { onPlay(song) })
+                val isSelected = selectedSongs.contains(song.id)
+                MostPlayedSongRow(
+                    song = song,
+                    isSelected = isSelected,
+                    isSelectionMode = isSelectionMode,
+                    onPlay = {
+                        if (isSelectionMode) {
+                            onToggleSelection(song.id)
+                        } else {
+                            onPlay(song)
+                        }
+                    },
+                    onLongPress = { onLongPress(song) }
+                )
             }
         }
     }
 }
 
 @Composable
-private fun MostPlayedSongRow(song: Song, onPlay: () -> Unit) {
+private fun MostPlayedSongRow(
+    song: Song,
+    isSelected: Boolean,
+    isSelectionMode: Boolean,
+    onPlay: () -> Unit,
+    onLongPress: () -> Unit
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onPlay() }
+            .background(
+                if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+                else Color.Transparent
+            )
+            .combinedClickable(
+                onClick = onPlay,
+                onLongClick = onLongPress
+            )
             .padding(horizontal = 16.dp, vertical = 8.dp)
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth()
         ) {
-            // Music icon
-            Icon(
-                painter = painterResource(id = R.drawable.music),
-                contentDescription = "Song",
-                tint = Color.Unspecified,
-                modifier = Modifier
-                    .size(40.dp)
-                    .padding(end = 8.dp)
-            )
+            // Selection indicator or Music icon
+            if (isSelectionMode) {
+                Icon(
+                    imageVector = if (isSelected) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
+                    contentDescription = if (isSelected) "Selected" else "Not selected",
+                    tint = if (isSelected) MaterialTheme.colorScheme.primary else Color.Gray,
+                    modifier = Modifier
+                        .size(40.dp)
+                        .padding(end = 8.dp)
+                )
+            } else {
+                Icon(
+                    painter = painterResource(id = R.drawable.music),
+                    contentDescription = "Song",
+                    tint = Color.Unspecified,
+                    modifier = Modifier
+                        .size(40.dp)
+                        .padding(end = 8.dp)
+                )
+            }
 
             // Song info
             Column(
                 modifier = Modifier.weight(1f)
             ) {
-                // Song title
                 Text(
                     text = song.title,
                     style = MaterialTheme.typography.titleMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                // Artist
                 Text(
                     text = song.artist,
                     style = MaterialTheme.typography.bodyMedium.copy(color = Color.Gray),
@@ -102,12 +145,14 @@ private fun MostPlayedSongRow(song: Song, onPlay: () -> Unit) {
             }
             
             // Play count
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = "${song.playCount}",
-                style = MaterialTheme.typography.bodySmall.copy(color = Color.Gray),
-                modifier = Modifier.padding(start = 8.dp)
-            )
+            if (!isSelectionMode) {
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "${song.playCount}",
+                    style = MaterialTheme.typography.bodySmall.copy(color = Color.Gray),
+                    modifier = Modifier.padding(start = 8.dp)
+                )
+            }
         }
 
         // Grey divider line

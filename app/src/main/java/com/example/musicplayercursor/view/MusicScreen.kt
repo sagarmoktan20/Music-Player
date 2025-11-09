@@ -2,7 +2,9 @@ package com.example.musicplayercursor.view
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 //import androidx.compose.foundation.R
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,8 +21,10 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.Divider
@@ -54,6 +58,8 @@ import com.example.musicplayercursor.viewmodel.PermissionViewModel
 import kotlinx.coroutines.launch
 import com.example.musicplayercursor.R   // <-- replace with your actual package name
 import com.example.musicplayercursor.view.PlaylistScreens.PlaylistsScreen
+import com.example.musicplayercursor.view.PlaylistScreens.PlaylistFolderList
+import com.example.musicplayercursor.view.PlaylistScreens.PlaylistSongsScreen
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -80,25 +86,103 @@ fun MusicScreen(
 	}
 
 	var showTrackScreen by remember { mutableStateOf(false) }
+	var showPlaylistFolderList by remember { mutableStateOf(false) }
+	var selectedPlaylistId by remember { mutableStateOf<String?>(null) }
+	
+	// Handle back button in selection mode
+	BackHandler(enabled = uiState.isSelectionMode && !showPlaylistFolderList && selectedPlaylistId == null) {
+		viewModel.exitSelectionMode()
+	}
+	
+	// Handle back button for playlist folder list
+	BackHandler(enabled = showPlaylistFolderList) {
+		showPlaylistFolderList = false
+	}
+	
+	// Handle back button for playlist songs screen
+	BackHandler(enabled = selectedPlaylistId != null) {
+		selectedPlaylistId = null
+	}
 
 	Scaffold(
 		bottomBar = {
 			if (!showTrackScreen) {
-			if (uiState.current != null) {
-				NowPlayingBar(
-					title = uiState.current!!.title,
-					artist = uiState.current!!.artist,
-					isPlaying = uiState.isPlaying,
-					onToggle = onToggle,
-					onPrevious = { viewModel.playPreviousSong(context) },
-					onNext = { viewModel.playNextSong(context) },
-					onClick = { showTrackScreen = true }
-				)
+				// Show selection bottom bar when in selection mode and songs are selected
+				if (uiState.isSelectionMode && uiState.selectedSongs.isNotEmpty() && !showPlaylistFolderList && selectedPlaylistId == null) {
+					SelectionBottomBar(
+						selectedCount = uiState.selectedSongs.size,
+						onShare = { viewModel.shareSelectedSongs(context) },
+						onDelete = { viewModel.deleteSelectedSongs(context) },
+						onAdd = { showPlaylistFolderList = true }
+					)
+				} else if (uiState.current != null && selectedPlaylistId == null) {
+					// Show now playing bar when not in selection mode
+					NowPlayingBar(
+						title = uiState.current!!.title,
+						artist = uiState.current!!.artist,
+						isPlaying = uiState.isPlaying,
+						onToggle = onToggle,
+						onPrevious = { viewModel.playPreviousSong(context) },
+						onNext = { viewModel.playNextSong(context) },
+						onClick = { showTrackScreen = true }
+					)
+				}
 			}
 		}
-		}
 	) { padding ->
-		if (showTrackScreen && uiState.current != null) {
+		if (showPlaylistFolderList) {
+			Box(
+				modifier = Modifier
+					.fillMaxSize()
+					.padding(padding)
+			) {
+				PlaylistFolderList(
+					playlists = uiState.playlists,
+					selectedSongIds = uiState.selectedSongs,
+					onCreatePlaylist = { name ->
+						viewModel.createPlaylist(context, name)
+						viewModel.loadPlaylists(context)
+					},
+					onPlaylistSelected = { playlistId, songIds ->
+						if (playlistId == "favourites") {
+							// Favourites folder - add songs to favourites
+							viewModel.addSongsToFavourites(context, songIds)
+							showPlaylistFolderList = false
+						} else if (playlistId != null) {
+							// User-created playlist - add songs to it
+							viewModel.addSongsToPlaylist(context, playlistId, songIds)
+							showPlaylistFolderList = false
+							// Show the playlist songs screen after adding
+							selectedPlaylistId = playlistId
+						} else {
+							// Other default folders - handle later if needed
+							showPlaylistFolderList = false
+						}
+					},
+					onDismiss = { showPlaylistFolderList = false },
+					onLoadPlaylists = { viewModel.loadPlaylists(context) }
+				)
+			}
+		} else if (selectedPlaylistId != null) {
+			Box(
+				modifier = Modifier
+					.fillMaxSize()
+					.padding(padding)
+			) {
+				// Get songs in the selected playlist - this will update when playlists or songs change
+				val playlistSongs = remember(selectedPlaylistId, uiState.playlists, uiState.songs) {
+					viewModel.getSongsInPlaylist(selectedPlaylistId!!)
+				}
+				PlaylistSongsScreen(
+					songs = playlistSongs,
+					isSelectionMode = uiState.isSelectionMode,
+					selectedSongs = uiState.selectedSongs,
+					onPlay = { onPlay(it) },
+					onLongPress = { song -> viewModel.enterSelectionMode(song.id) },
+					onToggleSelection = { songId -> viewModel.toggleSongSelection(songId) }
+				)
+			}
+		} else if (showTrackScreen && uiState.current != null) {
 			BackHandler(onBack = { showTrackScreen = false })
 			Box(
 				modifier = Modifier
@@ -144,7 +228,11 @@ fun MusicScreen(
                     0 -> {
                         FavouritesScreen(
                             songs = uiState.songs,
-                            onPlay = { onPlay(it) }
+                            isSelectionMode = uiState.isSelectionMode,
+                            selectedSongs = uiState.selectedSongs,
+                            onPlay = { onPlay(it) },
+                            onLongPress = { song -> viewModel.enterSelectionMode(song.id) },
+                            onToggleSelection = { songId -> viewModel.toggleSongSelection(songId) }
                         )
                     }
 
@@ -152,7 +240,15 @@ fun MusicScreen(
 							// Playlists screen (already implemented elsewhere)
 							PlaylistsScreen(
 								songs = uiState.songs,
-								onPlay = { onPlay(it) }
+								playlists = uiState.playlists,
+								isSelectionMode = uiState.isSelectionMode,
+								selectedSongs = uiState.selectedSongs,
+								onPlay = { onPlay(it) },
+								onLongPress = { song -> viewModel.enterSelectionMode(song.id) },
+								onToggleSelection = { songId -> viewModel.toggleSongSelection(songId) },
+								onCreatePlaylist = { name -> viewModel.createPlaylist(context, name) },
+								onLoadPlaylists = { viewModel.loadPlaylists(context) },
+								onPlaylistClicked = { playlistId -> selectedPlaylistId = playlistId }
 							)
 						}
 
@@ -163,7 +259,21 @@ fun MusicScreen(
 									.fillMaxSize()
 							) {
 								items(uiState.songs, key = { it.id }) { song ->
-									SongRow(song = song) { onPlay(song) }
+									SongRow(
+										song = song,
+										isSelected = uiState.selectedSongs.contains(song.id),
+										isSelectionMode = uiState.isSelectionMode,
+										onClick = {
+											if (uiState.isSelectionMode) {
+												viewModel.toggleSongSelection(song.id)
+											} else {
+												onPlay(song)
+											}
+										},
+										onLongPress = {
+											viewModel.enterSelectionMode(song.id)
+										}
+									)
 								}
 							}
 						}
@@ -174,26 +284,51 @@ fun MusicScreen(
 	}
 }
 @Composable
-private fun SongRow(song: Song, onClick: () -> Unit) {
+private fun SongRow(
+	song: Song,
+	isSelected: Boolean,
+	isSelectionMode: Boolean,
+	onClick: () -> Unit,
+	onLongPress: () -> Unit
+) {
 	Column(
 		modifier = Modifier
 			.fillMaxWidth()
-			.clickable { onClick() }
+			.background(
+				if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+				else Color.Transparent
+			)
+			.combinedClickable(
+				onClick = onClick,
+				onLongClick = onLongPress
+			)
 			.padding(horizontal = 16.dp, vertical = 8.dp)
 	) {
 		Row(
 			verticalAlignment = Alignment.CenterVertically,
 			modifier = Modifier.fillMaxWidth()
 		) {
-			// Music icon
-			Icon(
-				painter = painterResource(id = R.drawable.music),
-				contentDescription = "Song",//
-				tint = Color.Unspecified,
-				modifier = Modifier
-					.size(40.dp)
-					.padding(end = 8.dp)
-			)
+			// Selection indicator (checkbox) or music icon
+			if (isSelectionMode) {
+				Icon(
+					imageVector = if (isSelected) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
+					contentDescription = if (isSelected) "Selected" else "Not selected",
+					tint = if (isSelected) MaterialTheme.colorScheme.primary else Color.Gray,
+					modifier = Modifier
+						.size(40.dp)
+						.padding(end = 8.dp)
+				)
+			} else {
+				// Music icon
+				Icon(
+					painter = painterResource(id = R.drawable.music),
+					contentDescription = "Song",
+					tint = Color.Unspecified,
+					modifier = Modifier
+						.size(40.dp)
+						.padding(end = 8.dp)
+				)
+			}
 
 			// Song title (single line, ellipsis if too long)
 			Text(

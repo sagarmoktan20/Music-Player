@@ -1,8 +1,7 @@
 package com.example.musicplayercursor.view.PlaylistScreens
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -11,6 +10,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material3.Divider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -20,17 +22,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.example.musicplayercursor.R
 import com.example.musicplayercursor.model.Song
 
 @Composable
 fun RecentlyAdded(
     songs: List<Song> = emptyList(),
-    onPlay: (Song) -> Unit = {}
+    isSelectionMode: Boolean = false,
+    selectedSongs: Set<Long> = emptySet(),
+    onPlay: (Song) -> Unit = {},
+    onLongPress: (Song) -> Unit = {},
+    onToggleSelection: (Long) -> Unit = {}
 ) {
    val recent = songs.filter { it.dateAdded > 0 }.sortedByDescending { it.dateAdded }.take(100)
 
@@ -48,44 +52,77 @@ fun RecentlyAdded(
 
     }else{
         items(recent, key = { it.id }) { song ->
-            MostRecentSongRow(song = song, onPlay = { onPlay(song) })
-
-
+            val isSelected = selectedSongs.contains(song.id)
+            MostRecentSongRow(
+                song = song,
+                isSelected = isSelected,
+                isSelectionMode = isSelectionMode,
+                onPlay = {
+                    if (isSelectionMode) {
+                        onToggleSelection(song.id)
+                    } else {
+                        onPlay(song)
+                    }
+                },
+                onLongPress = { onLongPress(song) }
+            )
         }}
 
 }}
 
 @Composable
-fun MostRecentSongRow(song: Song, onPlay: () -> Unit) {
+fun MostRecentSongRow(
+    song: Song,
+    isSelected: Boolean,
+    isSelectionMode: Boolean,
+    onPlay: () -> Unit,
+    onLongPress: () -> Unit
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onPlay() }
+            .background(
+                if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+                else Color.Transparent
+            )
+            .combinedClickable(
+                onClick = onPlay,
+                onLongClick = onLongPress
+            )
             .padding(horizontal = 16.dp, vertical = 8.dp)
     ){
         Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier.fillMaxWidth()
     ){
-            Icon(
-                painter = painterResource(id = R.drawable.music),
-                contentDescription = "Song",
-                tint = Color.Unspecified,
-                modifier = Modifier
-                    .size(40.dp)
-                    .padding(end = 8.dp)
-            )
+            if (isSelectionMode) {
+                Icon(
+                    imageVector = if (isSelected) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
+                    contentDescription = if (isSelected) "Selected" else "Not selected",
+                    tint = if (isSelected) MaterialTheme.colorScheme.primary else Color.Gray,
+                    modifier = Modifier
+                        .size(40.dp)
+                        .padding(end = 8.dp)
+                )
+            } else {
+                Icon(
+                    painter = painterResource(id = R.drawable.music),
+                    contentDescription = "Song",
+                    tint = Color.Unspecified,
+                    modifier = Modifier
+                        .size(40.dp)
+                        .padding(end = 8.dp)
+                )
+            }
             Column(
                 modifier = Modifier.weight(1f)
             ) {
-                // Song title
                 Text(
                     text = song.title,
                     style = MaterialTheme.typography.titleMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                // Artist
                 Text(
                     text = song.artist,
                     style = MaterialTheme.typography.bodyMedium.copy(color = Color.Gray),

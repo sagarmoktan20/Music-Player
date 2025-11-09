@@ -21,6 +21,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.getValue
@@ -29,73 +30,154 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.musicplayercursor.R
 import androidx.activity.compose.BackHandler
 import com.example.musicplayercursor.model.Song
+import com.example.musicplayercursor.model.Playlist
+import com.example.musicplayercursor.view.CreatePlaylistDialog
+import com.example.musicplayercursor.view.FavouritesScreen
 
 private data class PlaylistFolderUi(
+    val id: String? = null,
     val title: String,
     val isAddFolder: Boolean = false
 )
 
-@Composable
-fun PlaylistsScreen(
-    songs: List<Song> = emptyList(),
-    onPlay: (Song) -> Unit = {}
-) {
-    val folders = listOf(
-        PlaylistFolderUi("Recently added"),
-        PlaylistFolderUi("Most played"),
-        PlaylistFolderUi("Recently played"),
-        PlaylistFolderUi("New playlist", isAddFolder = true)
-    )
+    @Composable
+    fun PlaylistsScreen(
+        songs: List<Song> = emptyList(),
+        playlists: List<Playlist> = emptyList(),
+        isSelectionMode: Boolean = false,
+        selectedSongs: Set<Long> = emptySet(),
+        onPlay: (Song) -> Unit = {},
+        onLongPress: (Song) -> Unit = {},
+        onToggleSelection: (Long) -> Unit = {},
+        onCreatePlaylist: (String) -> Unit = {},
+        onLoadPlaylists: () -> Unit = {},
+        onPlaylistClicked: (String) -> Unit = {}
+    ) {
+        val context = LocalContext.current
+        var showCreateDialog by remember { mutableStateOf(false) }
+        var opened by remember { mutableStateOf<String?>(null) }
+        
+        // Load playlists when screen is shown
+        LaunchedEffect(Unit) {
+            onLoadPlaylists()
+        }
+        
+        // Combine default folders with user-created playlists
+        val defaultFolders = listOf(
+            PlaylistFolderUi(title = "Recently added"),
+            PlaylistFolderUi(title = "Most played"),
+            PlaylistFolderUi(title = "Recently played"),
+            PlaylistFolderUi(title = "Favourites")
+        )
+        
+        val userPlaylists = playlists.map { playlist ->
+            PlaylistFolderUi(id = playlist.id, title = playlist.name)
+        }
+        
+        val allFolders = (defaultFolders + userPlaylists + listOf(
+            PlaylistFolderUi(title = "New playlist", isAddFolder = true)
+        ))
 
-    var opened by remember { mutableStateOf<String?>(null) }
-
-    when (opened) {
-        "Recently added" -> {
-            BackHandler { opened = null }
-            RecentlyAdded(songs = songs, onPlay = onPlay)
-        }
-        "Most played" -> {
-            BackHandler { opened = null }
-            MostPlayed(songs = songs, onPlay = onPlay)
-        }
-        "Recently played" -> {
-            BackHandler { opened = null }
-            RecentlyPlayed(songs = songs, onPlay = onPlay)
-        }
-        else -> {
-            Surface(tonalElevation = 0.dp) {
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(2),
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    contentPadding = PaddingValues(bottom = 12.dp)
-                ) {
-                    items(folders) { folder ->
-                        PlaylistFolderCard(
-                            folder = folder,
-                            onClick = {
-                                if (!folder.isAddFolder) {
-                                    opened = folder.title
-                                } else {
-                                    // TODO: create playlist flow (later)
+        when (opened) {
+            "Recently added" -> {
+                BackHandler { opened = null }
+                RecentlyAdded(
+                    songs = songs,
+                    isSelectionMode = isSelectionMode,
+                    selectedSongs = selectedSongs,
+                    onPlay = onPlay,
+                    onLongPress = onLongPress,
+                    onToggleSelection = onToggleSelection
+                )
+            }
+            "Most played" -> {
+                BackHandler { opened = null }
+                MostPlayed(
+                    songs = songs,
+                    isSelectionMode = isSelectionMode,
+                    selectedSongs = selectedSongs,
+                    onPlay = onPlay,
+                    onLongPress = onLongPress,
+                    onToggleSelection = onToggleSelection
+                )
+            }
+            "Recently played" -> {
+                BackHandler { opened = null }
+                RecentlyPlayed(
+                    songs = songs,
+                    isSelectionMode = isSelectionMode,
+                    selectedSongs = selectedSongs,
+                    onPlay = onPlay,
+                    onLongPress = onLongPress,
+                    onToggleSelection = onToggleSelection
+                )
+            }
+            "Favourites" ->{
+                BackHandler { opened = null }
+                FavouritesScreen(
+                    songs = songs,
+                    isSelectionMode = isSelectionMode,
+                    selectedSongs = selectedSongs,
+                    onPlay = { onPlay(it) },
+                    onLongPress = onLongPress,
+                    onToggleSelection = onToggleSelection
+                )
+            }
+            else -> {
+                Surface(tonalElevation = 0.dp) {
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(2),
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        contentPadding = PaddingValues(bottom = 12.dp)
+                    ) {
+                        items(allFolders, key = { it.id ?: it.title }) { folder ->
+                            PlaylistFolderCard(
+                                folder = folder,
+                                onClick = {
+                                    if (folder.isAddFolder) {
+                                        showCreateDialog = true
+                                    } else {
+                                        // Check if it's a user-created playlist or default folder
+                                        if (folder.id != null) {
+                                            // User-created playlist - open playlist songs screen
+                                            onPlaylistClicked(folder.id)
+                                        } else {
+                                            // Default folder
+                                            opened = folder.title
+                                        }
+                                    }
                                 }
-                            }
-                        )
+                            )
+                        }
                     }
                 }
             }
         }
+        
+        // Show create playlist dialog
+        if (showCreateDialog) {
+            CreatePlaylistDialog(
+                onDismiss = { showCreateDialog = false },
+                onCreate = { name ->
+                    onCreatePlaylist(name)
+                    showCreateDialog = false
+                }
+            )
+        }
     }
-}
+
 
 @Composable
 private fun PlaylistFolderCard(folder: PlaylistFolderUi, onClick: () -> Unit) {
@@ -130,6 +212,8 @@ private fun PlaylistFolderCard(folder: PlaylistFolderUi, onClick: () -> Unit) {
             text = folder.title,
             style = MaterialTheme.typography.titleMedium,
             textAlign = TextAlign.Center,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(top = 8.dp)

@@ -12,10 +12,12 @@ import androidx.media3.common.AudioAttributes
 import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
 import com.example.musicplayercursor.model.Song
+import com.example.musicplayercursor.model.Playlist
 import com.example.musicplayercursor.repository.FavouritesRepository
 import com.example.musicplayercursor.repository.MusicRepository
 import com.example.musicplayercursor.repository.PlayCountRepository
 import com.example.musicplayercursor.repository.LastPlayedRepository
+import com.example.musicplayercursor.repository.PlaylistRepository
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -28,7 +30,10 @@ data class MusicUiState(
     val current: Song? = null,
     val isPlaying: Boolean = false,
     val currentPosition: Long = 0L,
-    val duration: Long = 0L
+    val duration: Long = 0L,
+    val selectedSongs: Set<Long> = emptySet(),
+    val isSelectionMode: Boolean = false,
+    val playlists: List<Playlist> = emptyList()
 )
 class MusicViewModel: ViewModel() {
 
@@ -37,6 +42,7 @@ class MusicViewModel: ViewModel() {
     private var favouritesRepository: FavouritesRepository? = null
     private var playCountRepository: PlayCountRepository? = null
     private var lastPlayedRepository: LastPlayedRepository? = null
+    private var playlistRepository: PlaylistRepository? = null
     private var contentObserver: ContentObserver? = null
     private var contentResolver: android.content.ContentResolver? = null
     private var applicationContext: Context? = null
@@ -61,11 +67,13 @@ class MusicViewModel: ViewModel() {
             favouritesRepository = FavouritesRepository(context)
             playCountRepository = PlayCountRepository(context)
             lastPlayedRepository = LastPlayedRepository(context)
+            playlistRepository = PlaylistRepository(context)
             val repo = MusicRepository(context.contentResolver)
             val loadedSongs = repo.loadAudio()
             val favouriteIds = favouritesRepository?.getFavouriteSongIds() ?: emptySet()
             val playCounts = playCountRepository?.getAllPlayCounts() ?: emptyMap()
             val lastPlayedMap = lastPlayedRepository?.getAllLastPlayed() ?: emptyMap()
+            val playlists = playlistRepository?.getAllPlaylists() ?: emptyList()
             
             // Mark songs as favourite and add play counts based on SharedPreferences
             val songsWithFavouritesAndCounts = loadedSongs.map { song ->
@@ -90,8 +98,41 @@ class MusicViewModel: ViewModel() {
             
             _uiState.value = _uiState.value.copy(
                 songs = songsWithFavouritesAndCounts,
-                current = updatedCurrent
+                current = updatedCurrent,
+                playlists = playlists
             )
+        }
+    }
+    
+    fun loadPlaylists(context: Context) {
+        viewModelScope.launch {
+            if (playlistRepository == null) {
+                playlistRepository = PlaylistRepository(context)
+            }
+            val playlists = playlistRepository?.getAllPlaylists() ?: emptyList()
+            _uiState.value = _uiState.value.copy(playlists = playlists)
+        }
+    }
+    
+    fun createPlaylist(context: Context, name: String) {
+        viewModelScope.launch {
+            if (playlistRepository == null) {
+                playlistRepository = PlaylistRepository(context)
+            }
+            playlistRepository?.addPlaylist(name)
+            val playlists = playlistRepository?.getAllPlaylists() ?: emptyList()
+            _uiState.value = _uiState.value.copy(playlists = playlists)
+        }
+    }
+    
+    fun deletePlaylist(context: Context, playlistId: String) {
+        viewModelScope.launch {
+            if (playlistRepository == null) {
+                playlistRepository = PlaylistRepository(context)
+            }
+            playlistRepository?.deletePlaylist(playlistId)
+            val playlists = playlistRepository?.getAllPlaylists() ?: emptyList()
+            _uiState.value = _uiState.value.copy(playlists = playlists)
         }
     }
     
@@ -130,6 +171,11 @@ class MusicViewModel: ViewModel() {
         }
     }
     fun play(context: Context, song: Song) {
+        // Exit selection mode if active
+        if (_uiState.value.isSelectionMode) {
+            exitSelectionMode()
+        }
+        
         preparePlayer(context)
         val p = player ?: return
         
@@ -249,6 +295,139 @@ class MusicViewModel: ViewModel() {
         }
     }
 
+    // Selection Mode Functions
+    fun enterSelectionMode(songId: Long? = null) {
+        val selected = if (songId != null) setOf(songId) else emptySet<Long>()
+        _uiState.value = _uiState.value.copy(
+            isSelectionMode = true,
+            selectedSongs = selected
+        )
+    }
+    
+    fun exitSelectionMode() {
+        _uiState.value = _uiState.value.copy(
+            isSelectionMode = false,
+            selectedSongs = emptySet()
+        )
+    }
+    
+    fun toggleSongSelection(songId: Long) {
+        val currentSelected = _uiState.value.selectedSongs.toMutableSet()
+        if (currentSelected.contains(songId)) {
+            currentSelected.remove(songId)
+        } else {
+            currentSelected.add(songId)
+        }
+        
+        _uiState.value = _uiState.value.copy(
+            selectedSongs = currentSelected
+        )
+        
+        // Exit selection mode if no songs are selected
+        if (currentSelected.isEmpty()) {
+            exitSelectionMode()
+        }
+    }
+    
+    fun clearSelection() {
+        _uiState.value = _uiState.value.copy(
+            selectedSongs = emptySet()
+        )
+    }
+    
+    // Action handlers for selected songs (placeholders for future implementation)
+    fun shareSelectedSongs(context: Context) {
+        // TODO: Implement share functionality
+        val selectedIds = _uiState.value.selectedSongs
+        // Placeholder: Exit selection mode after action
+        exitSelectionMode()
+    }
+    
+    fun deleteSelectedSongs(context: Context) {
+        // TODO: Implement delete functionality
+        val selectedIds = _uiState.value.selectedSongs
+        // Placeholder: Exit selection mode after action
+        exitSelectionMode()
+    }
+    
+    fun addSelectedSongs(context: Context) {
+        // This is now handled by PlaylistFolderList
+        // Keep this for backward compatibility but it shouldn't be called directly
+        exitSelectionMode()
+    }
+    
+    fun addSongsToPlaylist(context: Context, playlistId: String, songIds: Set<Long>) {
+        viewModelScope.launch {
+            if (playlistRepository == null) {
+                playlistRepository = PlaylistRepository(context)
+            }
+            // Filter out songs that are already in the playlist to avoid duplicates
+            val existingSongIds = playlistRepository?.getSongIdsInPlaylist(playlistId) ?: emptySet()
+            val newSongIds = songIds - existingSongIds
+            if (newSongIds.isNotEmpty()) {
+                playlistRepository?.addSongsToPlaylist(playlistId, newSongIds)
+                // Reload playlists to update UI
+                val playlists = playlistRepository?.getAllPlaylists() ?: emptyList()
+                _uiState.value = _uiState.value.copy(playlists = playlists)
+            }
+            // Exit selection mode after adding
+            exitSelectionMode()
+        }
+    }
+    
+    fun addSongsToFavourites(context: Context, songIds: Set<Long>) {
+        val repo = favouritesRepository ?: FavouritesRepository(context).also {
+            favouritesRepository = it
+        }
+        
+        viewModelScope.launch {
+            // Get existing favourites to filter out duplicates
+            val existingFavourites = repo.getFavouriteSongIds()
+            val songsToAdd = songIds.filter { it !in existingFavourites }
+            
+            // Add each song to favourites (only if not already favourite)
+            songsToAdd.forEach { songId ->
+                repo.addFavourite(songId)
+            }
+            
+            // Update the songs in the list to reflect favourite status
+            val updatedSongs = _uiState.value.songs.map { song ->
+                if (songIds.contains(song.id) && !song.isFavourite) {
+                    song.copy(isFavourite = true)
+                } else {
+                    song
+                }
+            }
+            
+            // Update current song if it's in the selected songs
+            val updatedCurrent = _uiState.value.current?.let { currentSong ->
+                if (songIds.contains(currentSong.id) && !currentSong.isFavourite) {
+                    currentSong.copy(isFavourite = true)
+                } else {
+                    currentSong
+                }
+            }
+            
+            _uiState.value = _uiState.value.copy(
+                songs = updatedSongs,
+                current = updatedCurrent
+            )
+            
+            // Exit selection mode after adding
+            exitSelectionMode()
+        }
+    }
+    
+    fun getSongsInPlaylist(playlistId: String): List<Song> {
+        val playlist = _uiState.value.playlists.find { it.id == playlistId }
+        val songIds = playlist?.songIds ?: emptySet()
+        return _uiState.value.songs.filter { songIds.contains(it.id) }
+    }
+    
+    fun getFavouriteSongs(): List<Song> {
+        return _uiState.value.songs.filter { it.isFavourite }
+    }
+
     private fun startProgressUpdates() {
         progressUpdateJob?.cancel()
         progressUpdateJob = viewModelScope.launch {
@@ -266,6 +445,8 @@ class MusicViewModel: ViewModel() {
             }
         }
     }
+
+    
 
     override fun onCleared() {
         super.onCleared()
