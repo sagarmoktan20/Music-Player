@@ -96,6 +96,14 @@ class PlaylistRepository(context: Context) {
         }
     }
     
+    fun removeSongsFromAllPlaylists(songIds: Set<Long>) {
+        val existingPlaylists = getAllPlaylists().toMutableList()
+        val updatedPlaylists = existingPlaylists.map { playlist ->
+            playlist.copy(songIds = playlist.songIds - songIds)
+        }
+        savePlaylists(updatedPlaylists)
+    }
+    
     private fun savePlaylists(playlists: List<Playlist>) {
         val jsonArray = JSONArray()
         playlists.forEach { playlist ->

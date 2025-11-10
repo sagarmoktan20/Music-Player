@@ -86,3 +86,13 @@ class ReadMediaAudio: PermissionTextProvider {
         }
     }
 }
+
+class WriteMediaAudio: PermissionTextProvider {
+    override fun getDescription(isPermanentlyDeclined: Boolean): String {
+        return if (isPermanentlyDeclined) {
+            "Delete permission denied permanently. Go to settings to allow deleting songs."
+        } else {
+            "Allow deleting songs from your device."
+        }
+    }
+}

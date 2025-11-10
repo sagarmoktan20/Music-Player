@@ -28,6 +28,12 @@ class FavouritesRepository(context: Context) {
         saveFavourites(favourites)
     }
     
+    fun removeFavourites(songIds: Set<Long>) {
+        val favourites = getFavouriteSongIds().toMutableSet()
+        favourites.removeAll(songIds)
+        saveFavourites(favourites)
+    }
+    
     fun isFavourite(songId: Long): Boolean {
         return getFavouriteSongIds().contains(songId)
     }

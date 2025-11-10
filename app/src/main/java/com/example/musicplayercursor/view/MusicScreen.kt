@@ -88,6 +88,8 @@ fun MusicScreen(
 	var showTrackScreen by remember { mutableStateOf(false) }
 	var showPlaylistFolderList by remember { mutableStateOf(false) }
 	var selectedPlaylistId by remember { mutableStateOf<String?>(null) }
+	var showDeleteDialog by remember { mutableStateOf(false) }
+	var openedDefaultFolder by remember { mutableStateOf<String?>(null) }
 	
 	// Handle back button in selection mode
 	BackHandler(enabled = uiState.isSelectionMode && !showPlaylistFolderList && selectedPlaylistId == null) {
@@ -101,21 +103,38 @@ fun MusicScreen(
 	
 	// Handle back button for playlist songs screen
 	BackHandler(enabled = selectedPlaylistId != null) {
-		selectedPlaylistId = null
+		if (uiState.isSelectionMode) {
+			// If in selection mode, exit selection mode first
+			viewModel.exitSelectionMode()
+		} else {
+			// Otherwise, exit the playlist view
+			selectedPlaylistId = null
+		}
 	}
 
 	Scaffold(
 		bottomBar = {
 			if (!showTrackScreen) {
 				// Show selection bottom bar when in selection mode and songs are selected
-				if (uiState.isSelectionMode && uiState.selectedSongs.isNotEmpty() && !showPlaylistFolderList && selectedPlaylistId == null) {
+				if (uiState.isSelectionMode && uiState.selectedSongs.isNotEmpty() && !showPlaylistFolderList) {
 					SelectionBottomBar(
 						selectedCount = uiState.selectedSongs.size,
 						onShare = { viewModel.shareSelectedSongs(context) },
-						onDelete = { viewModel.deleteSelectedSongs(context) },
+						onDelete = { showDeleteDialog = true },
+						onRemove = when {
+							// Inside a user-created playlist
+							selectedPlaylistId != null -> {
+								{ viewModel.removeSelectedSongsFromPlaylist(context, selectedPlaylistId!!) }
+							}
+							// Inside Favourites (either opened via default folder or on the Favourites tab)
+							openedDefaultFolder == "Favourites" -> {
+								{ viewModel.removeSelectedSongsFromFavourites(context) }
+							}
+							else -> null
+						},
 						onAdd = { showPlaylistFolderList = true }
 					)
-				} else if (uiState.current != null && selectedPlaylistId == null) {
+				} else if (uiState.current != null) {
 					// Show now playing bar when not in selection mode
 					NowPlayingBar(
 						title = uiState.current!!.title,
@@ -160,26 +179,8 @@ fun MusicScreen(
 						}
 					},
 					onDismiss = { showPlaylistFolderList = false },
-					onLoadPlaylists = { viewModel.loadPlaylists(context) }
-				)
-			}
-		} else if (selectedPlaylistId != null) {
-			Box(
-				modifier = Modifier
-					.fillMaxSize()
-					.padding(padding)
-			) {
-				// Get songs in the selected playlist - this will update when playlists or songs change
-				val playlistSongs = remember(selectedPlaylistId, uiState.playlists, uiState.songs) {
-					viewModel.getSongsInPlaylist(selectedPlaylistId!!)
-				}
-				PlaylistSongsScreen(
-					songs = playlistSongs,
-					isSelectionMode = uiState.isSelectionMode,
-					selectedSongs = uiState.selectedSongs,
-					onPlay = { onPlay(it) },
-					onLongPress = { song -> viewModel.enterSelectionMode(song.id) },
-					onToggleSelection = { songId -> viewModel.toggleSongSelection(songId) }
+					onLoadPlaylists = { viewModel.loadPlaylists(context) },
+					onDefaultFolderOpened = { folder: String? -> openedDefaultFolder = folder }
 				)
 			}
 		} else if (showTrackScreen && uiState.current != null) {
@@ -196,11 +197,35 @@ fun MusicScreen(
 					currentPosition = uiState.currentPosition,
 					duration = uiState.duration,
 					isFavourite = uiState.current!!.isFavourite,
+					isLooping = uiState.isLooping,
 					onToggle = onToggle,
 					onPrevious = { viewModel.playPreviousSong(context) },
 					onNext = { viewModel.playNextSong(context) },
 					onSeek = { position -> viewModel.seekTo(position) },
-					onToggleFavourite = { viewModel.toggleFavourite(context, uiState.current!!) }
+					onToggleFavourite = { viewModel.toggleFavourite(context, uiState.current!!) },
+					onToggleLoop = { viewModel.toggleLoop() }
+				)
+			}
+		} else if (selectedPlaylistId != null) {
+			Box(
+				modifier = Modifier
+					.fillMaxSize()
+					.padding(padding)
+			) {
+				// Get songs in the selected playlist - this will update when playlists or songs change
+				val playlistSongs = remember(selectedPlaylistId, uiState.playlists, uiState.songs) {
+					viewModel.getSongsInPlaylist(selectedPlaylistId!!)
+				}
+				PlaylistSongsScreen(
+					songs = playlistSongs,
+					isSelectionMode = uiState.isSelectionMode,
+					selectedSongs = uiState.selectedSongs,
+					onPlay = { song ->
+						val queueIds = playlistSongs.map { it.id }
+						viewModel.playFromQueue(context, queueIds, song.id, selectedPlaylistId)
+					},
+					onLongPress = { song -> viewModel.enterSelectionMode(song.id) },
+					onToggleSelection = { songId -> viewModel.toggleSongSelection(songId) }
 				)
 			}
 		} else {
@@ -223,14 +248,21 @@ fun MusicScreen(
 					}
 				}
 
-				HorizontalPager(state = pagerState) { page ->
+				HorizontalPager(
+					state = pagerState,
+					userScrollEnabled = !uiState.isSelectionMode && uiState.selectedSongs.isEmpty()
+				) { page ->
 					when (page) {
                     0 -> {
+                        val favouriteSongs = remember(uiState.songs) { uiState.songs.filter { it.isFavourite } }
                         FavouritesScreen(
-                            songs = uiState.songs,
+                            songs = favouriteSongs,
                             isSelectionMode = uiState.isSelectionMode,
                             selectedSongs = uiState.selectedSongs,
-                            onPlay = { onPlay(it) },
+                            onPlay = { song ->
+                                val queueIds = favouriteSongs.map { it.id }
+                                viewModel.playFromQueue(context, queueIds, song.id, "favourites")
+                            },
                             onLongPress = { song -> viewModel.enterSelectionMode(song.id) },
                             onToggleSelection = { songId -> viewModel.toggleSongSelection(songId) }
                         )
@@ -238,17 +270,30 @@ fun MusicScreen(
 
 						1 -> {
 							// Playlists screen (already implemented elsewhere)
-							PlaylistsScreen(
+                            PlaylistsScreen(
 								songs = uiState.songs,
 								playlists = uiState.playlists,
 								isSelectionMode = uiState.isSelectionMode,
 								selectedSongs = uiState.selectedSongs,
-								onPlay = { onPlay(it) },
+                                onPlay = { song ->
+                                    if (openedDefaultFolder == "Favourites") {
+                                        val favs = uiState.songs.filter { it.isFavourite }
+                                        viewModel.playFromQueue(context, favs.map { it.id }, song.id, "favourites")
+                                    } else {
+                                        onPlay(song)
+                                    }
+                                },
 								onLongPress = { song -> viewModel.enterSelectionMode(song.id) },
 								onToggleSelection = { songId -> viewModel.toggleSongSelection(songId) },
 								onCreatePlaylist = { name -> viewModel.createPlaylist(context, name) },
 								onLoadPlaylists = { viewModel.loadPlaylists(context) },
-								onPlaylistClicked = { playlistId -> selectedPlaylistId = playlistId }
+								onPlaylistClicked = { playlistId ->
+									selectedPlaylistId = playlistId
+									openedDefaultFolder = null
+								},
+								onDefaultFolderOpened = { folder ->
+									openedDefaultFolder = folder
+								}
 							)
 						}
 
@@ -267,7 +312,12 @@ fun MusicScreen(
 											if (uiState.isSelectionMode) {
 												viewModel.toggleSongSelection(song.id)
 											} else {
-												onPlay(song)
+                                                viewModel.playFromQueue(
+                                                    context,
+                                                    uiState.songs.map { it.id },
+                                                    song.id,
+                                                    "all"
+                                                )
 											}
 										},
 										onLongPress = {
@@ -281,6 +331,18 @@ fun MusicScreen(
 				}
 			}
 		}
+	}
+	
+	// Delete confirmation dialog
+	if (showDeleteDialog) {
+		DeleteConfirmationDialog(
+			songCount = uiState.selectedSongs.size,
+			onDismiss = { showDeleteDialog = false },
+			onConfirm = {
+				viewModel.deleteSelectedSongs(context)
+				showDeleteDialog = false
+			}
+		)
 	}
 }
 @Composable

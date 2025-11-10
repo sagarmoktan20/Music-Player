@@ -14,10 +14,12 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
@@ -28,9 +30,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.musicplayercursor.R
 
 @Composable
 fun TrackScreen(
@@ -40,11 +44,13 @@ fun TrackScreen(
 	currentPosition: Long,
 	duration: Long,
 	isFavourite: Boolean,
+	isLooping: Boolean,
 	onToggle: () -> Unit,
 	onPrevious: () -> Unit,
 	onNext: () -> Unit,
 	onSeek: (Long) -> Unit,
-	onToggleFavourite: () -> Unit
+	onToggleFavourite: () -> Unit,
+	onToggleLoop: () -> Unit
 ) {
 	var isUserSeeking by remember { mutableStateOf(false) }
 	var seekPosition by remember { mutableStateOf(0f) }
@@ -146,7 +152,7 @@ fun TrackScreen(
 					tint = if (isFavourite) androidx.compose.ui.graphics.Color.Red else androidx.compose.ui.graphics.Color.Unspecified
 				)
 			}
-			
+
 			// Previous button - larger
 			IconButton(
 				onClick = onPrevious,
@@ -158,7 +164,7 @@ fun TrackScreen(
 					modifier = Modifier.size(48.dp)
 				)
 			}
-			
+
 			// Play/Pause button - largest
 			IconButton(
 				onClick = onToggle,
@@ -170,7 +176,9 @@ fun TrackScreen(
 					modifier = Modifier.size(64.dp)
 				)
 			}
-			
+
+
+
 			// Next button - larger
 			IconButton(
 				onClick = onNext,
@@ -182,6 +190,22 @@ fun TrackScreen(
 					modifier = Modifier.size(48.dp)
 				)
 			}
+			// Loop button - on left side of Next button
+			IconButton(
+				onClick = onToggleLoop,
+				modifier = Modifier.size(64.dp)
+			) {
+				Icon(
+					imageVector = if (isLooping) Icons.Default.RepeatOne else Icons.Default.SkipNext,
+					contentDescription = if (isLooping) "Loop Current" else "Next",
+					modifier = Modifier.size(32.dp),
+					tint = if (isLooping)
+						MaterialTheme.colorScheme.primary
+					else
+						LocalContentColor.current.copy(alpha = 0.7f)
+				)
+			}
+
 		}
 		
 		Spacer(modifier = Modifier.weight(1f))

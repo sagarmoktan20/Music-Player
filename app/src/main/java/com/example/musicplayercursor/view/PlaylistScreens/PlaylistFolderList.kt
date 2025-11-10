@@ -50,9 +50,10 @@ fun PlaylistFolderList(
     playlists: List<Playlist> = emptyList(),
     selectedSongIds: Set<Long> = emptySet(),
     onCreatePlaylist: (String) -> Unit = {},
-    onPlaylistSelected: (String?, Set<Long>) -> Unit = {_, _ -> Unit},
+    onPlaylistSelected: (String?, Set<Long>) -> Unit = { _, _ -> Unit },
     onDismiss: () -> Unit = {},
-    onLoadPlaylists: () -> Unit = {}
+    onLoadPlaylists: () -> Unit = {},
+    onDefaultFolderOpened: Function<Unit>
 ) {
     var showCreateDialog by remember { mutableStateOf(false) }
     

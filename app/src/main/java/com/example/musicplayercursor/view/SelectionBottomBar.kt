@@ -26,7 +26,8 @@ import androidx.compose.ui.unit.dp
 fun SelectionBottomBar(
     selectedCount: Int,
     onShare: () -> Unit,
-    onDelete: () -> Unit,
+	onDelete: () -> Unit,
+	onRemove: (() -> Unit)? = null,
     onAdd: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -61,15 +62,25 @@ fun SelectionBottomBar(
                 )
             }
             
-            // Delete button
-            IconButton(onClick = onDelete) {
-                Icon(
-                    imageVector = Icons.Default.Delete,
-                    contentDescription = "Delete",
-                    modifier = Modifier.size(24.dp),
-                    tint = MaterialTheme.colorScheme.error
-                )
-            }
+			// Delete or Remove button
+			if (onRemove != null) {
+				IconButton(onClick = onRemove) {
+					Icon(
+						imageVector = Icons.Default.Delete,
+						contentDescription = "Remove",
+						modifier = Modifier.size(24.dp)
+					)
+				}
+			} else {
+				IconButton(onClick = onDelete) {
+					Icon(
+						imageVector = Icons.Default.Delete,
+						contentDescription = "Delete",
+						modifier = Modifier.size(24.dp),
+						tint = MaterialTheme.colorScheme.error
+					)
+				}
+			}
             
             // Add button
             IconButton(onClick = onAdd) {

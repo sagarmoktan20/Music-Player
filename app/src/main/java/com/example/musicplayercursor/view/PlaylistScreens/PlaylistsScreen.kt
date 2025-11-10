@@ -59,11 +59,17 @@ private data class PlaylistFolderUi(
         onToggleSelection: (Long) -> Unit = {},
         onCreatePlaylist: (String) -> Unit = {},
         onLoadPlaylists: () -> Unit = {},
-        onPlaylistClicked: (String) -> Unit = {}
+        onPlaylistClicked: (String) -> Unit = {},
+        onDefaultFolderOpened: (String?) -> Unit = {}
     ) {
         val context = LocalContext.current
         var showCreateDialog by remember { mutableStateOf(false) }
         var opened by remember { mutableStateOf<String?>(null) }
+        
+        // Notify parent when default folder open state changes
+        LaunchedEffect(opened) {
+            onDefaultFolderOpened(opened)
+        }
         
         // Load playlists when screen is shown
         LaunchedEffect(Unit) {

@@ -1,5 +1,6 @@
 package com.example.musicplayercursor.viewmodel
 
+import android.Manifest
 import androidx.compose.runtime.mutableStateListOf
 import androidx.lifecycle.ViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -37,7 +38,10 @@ class PermissionViewModel: ViewModel() {
         if (isGranted) {
             // If the permission is granted, remove it from the queue if it was there
             val wasRemoved = visiblePermissionDialogQueue.remove(permission)
-            _hasAudioPermission.value = true
+            if (permission == Manifest.permission.READ_MEDIA_AUDIO ||
+                permission == Manifest.permission.READ_EXTERNAL_STORAGE) {
+                _hasAudioPermission.value = true
+            }
             android.util.Log.d("QUEUE_DEBUG", "Permission $permission granted, removed from queue: $wasRemoved, new queue: $visiblePermissionDialogQueue")
         } else {
             // Only add to the queue if it's not already there and not granted
