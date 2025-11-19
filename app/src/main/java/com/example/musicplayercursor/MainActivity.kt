@@ -3,10 +3,14 @@ package com.example.musicplayercursor
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
+import android.content.ServiceConnection
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.IBinder
 import android.provider.Settings
 import android.util.Log
 import androidx.activity.ComponentActivity
@@ -28,20 +32,47 @@ import com.example.musicplayercursor.viewmodel.MusicViewModel
 import com.example.musicplayercursor.viewmodel.PermissionDialog
 import com.example.musicplayercursor.viewmodel.PermissionViewModel
 import com.example.musicplayercursor.viewmodel.ReadMediaAudio
+import com.example.musicplayercursor.service.MusicService
 import androidx.lifecycle.viewmodel.compose.viewModel
 
 class MainActivity : ComponentActivity() {
 
     private val permissionsToRequest = arrayOf(
+
         if (Build.VERSION.SDK_INT >= 33)
             Manifest.permission.READ_MEDIA_AUDIO
         else
             Manifest.permission.READ_EXTERNAL_STORAGE
     )
+    
+    private var musicService: MusicService? = null
+    private var serviceBound = false
+    
+    private val serviceConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+            val binder = service as MusicService.LocalBinder
+            musicService = binder.getService()
+            serviceBound = true
+            Log.d("MainActivity", "Service connected")
+        }
+
+        override fun onServiceDisconnected(name: ComponentName?) {
+            musicService = null
+            serviceBound = false
+            Log.d("MainActivity", "Service disconnected")
+        }
+    }
+    
     @SuppressLint("ViewModelConstructorInComposable")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        
+        // Start and bind to MusicService
+        val serviceIntent = Intent(this, MusicService::class.java)
+        startService(serviceIntent)
+        bindService(serviceIntent, serviceConnection, Context.BIND_AUTO_CREATE)
+        
         setContent {
 
             MusicPlayercursorTheme {
@@ -62,6 +93,13 @@ class MainActivity : ComponentActivity() {
                 )
                 LaunchedEffect(Unit) {
                     multiplePermissionResultLauncher.launch(permissionsToRequest)
+                }
+                
+                // Bind service to ViewModel when service is connected
+                LaunchedEffect(serviceBound) {
+                    if (serviceBound && musicService != null) {
+                        viewModel.bindToService(musicService!!)
+                    }
                 }
 
                 if (dialogQueue.isNotEmpty()) {
@@ -105,6 +143,14 @@ class MainActivity : ComponentActivity() {
                     )
 
             }
+        }
+    }
+    
+    override fun onDestroy() {
+        super.onDestroy()
+        if (serviceBound) {
+            unbindService(serviceConnection)
+            serviceBound = false
         }
     }
 }

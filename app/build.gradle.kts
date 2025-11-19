@@ -51,6 +51,7 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation("androidx.compose.material:material-icons-extended")
     implementation(libs.androidx.media3.exoplayer)
+    implementation(libs.androidx.media3.session)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
@@ -64,4 +65,5 @@ dependencies {
     implementation("androidx.compose.foundation:foundation-layout:1.7.0")
 
     implementation ("com.google.android.exoplayer:exoplayer-ui:2.19.1")
+    implementation ("androidx.media:media:1.7.0")
 }

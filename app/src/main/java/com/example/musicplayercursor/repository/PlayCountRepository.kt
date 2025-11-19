@@ -2,38 +2,44 @@ package com.example.musicplayercursor.repository
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.util.Log
 
-class PlayCountRepository(context: Context) {
-    private val prefs: SharedPreferences = context.getSharedPreferences(
-        "playcount_prefs",
-        Context.MODE_PRIVATE
-    )
-    
-    private val PLAY_COUNT_PREFIX = "playcount_"
-    
+object PlayCountRepository {
+    private const val PREF_NAME = "playcount_prefs"
+    private const val PLAY_COUNT_PREFIX = "playcount_"
+
+    private lateinit var prefs: SharedPreferences
+
+    fun init(context: Context) {
+        if (!::prefs.isInitialized) {
+            prefs = context.applicationContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+        }
+    }
+
+    fun incrementPlayCount(songId: Long) {
+        initIfNeeded()
+        val current = prefs.getInt("$PLAY_COUNT_PREFIX$songId", 0)
+        prefs.edit().putInt("$PLAY_COUNT_PREFIX$songId", current + 1).apply()
+    }
+
     fun getPlayCount(songId: Long): Int {
+        initIfNeeded()
         return prefs.getInt("$PLAY_COUNT_PREFIX$songId", 0)
     }
-    
-    fun incrementPlayCount(songId: Long) {
-        val currentCount = getPlayCount(songId)
-        prefs.edit()
-            .putInt("$PLAY_COUNT_PREFIX$songId", currentCount + 1)
-            .apply()
-    }
-    
+
     fun getAllPlayCounts(): Map<Long, Int> {
-        val playCounts = mutableMapOf<Long, Int>()
-        val allEntries = prefs.all
-        for ((key, value) in allEntries) {
-            if (key.startsWith(PLAY_COUNT_PREFIX) && value is Int) {
-                val songId = key.removePrefix(PLAY_COUNT_PREFIX).toLongOrNull()
-                if (songId != null) {
-                    playCounts[songId] = value
-                }
+        initIfNeeded()
+        return prefs.all
+            .filter { (k, _) -> k.startsWith(PLAY_COUNT_PREFIX) }
+            .mapNotNull { (k, v) ->
+                k.removePrefix(PLAY_COUNT_PREFIX).toLongOrNull()?.let { it to v as Int }
             }
+            .toMap()
+    }
+
+    private fun initIfNeeded() {
+        if (!::prefs.isInitialized) {
+            throw IllegalStateException("PlayCountRepository not initialized! Call init() in Application")
         }
-        return playCounts
     }
 }
-
