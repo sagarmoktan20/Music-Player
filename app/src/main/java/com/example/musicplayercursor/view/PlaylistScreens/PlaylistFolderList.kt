@@ -64,8 +64,9 @@ fun PlaylistFolderList(
     
     // Combine default folders with user-created playlists
     val defaultFolders = listOf(
-        PlaylistFolderItem(id = "favourites", title = "Favourites")//        PlaylistFolderItem(title = "Most played"),
-//        PlaylistFolderItem(title = "Recently played")
+        PlaylistFolderItem(id = "favourites", title = "Favourites"),
+//            PlaylistFolderItem(id = "mostplayed", title = "Most played"),
+//       PlaylistFolderItem(id="recentlyplayed", title = "Recently played")
     )
     
     val userPlaylists = playlists.map { playlist ->

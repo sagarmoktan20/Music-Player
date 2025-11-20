@@ -22,6 +22,8 @@ import androidx.media3.exoplayer.ExoPlayer
 import com.example.musicplayercursor.MainActivity
 import com.example.musicplayercursor.R
 import com.example.musicplayercursor.model.Song
+import com.example.musicplayercursor.repository.LastPlayedRepository
+import com.example.musicplayercursor.repository.PlayCountRepository
 
 class MusicService : Service() {
 
@@ -214,8 +216,9 @@ class MusicService : Service() {
     }
 
     fun playPlaylist(songs: List<Song>, startIndex: Int) {
-        Log.d(TAG, "playPlaylist: ${songs.size} songs, startIndex=$startIndex")
-        
+      //  Log.d(TAG, "playPlaylist: ${songs.size} songs, startIndex=$startIndex")
+        Log.d("QueueDebug", "Queue order (Service): ${songs.map { it.playCount }}")
+
         if (songs.isEmpty() || startIndex < 0 || startIndex >= songs.size) {
             Log.w(TAG, "Invalid playlist or index")
             return
@@ -230,7 +233,10 @@ class MusicService : Service() {
 
     fun playSong(song: Song) {
         Log.d(TAG, "playSong: ${song.title}")
-        
+        PlayCountRepository.incrementPlayCount(song.id)
+        LastPlayedRepository.setLastPlayed(song.id, System.currentTimeMillis())
+
+
         currentSong = song
         
         // Update current index if song is in playlist

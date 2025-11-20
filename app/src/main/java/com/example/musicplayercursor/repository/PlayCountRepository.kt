@@ -18,6 +18,7 @@ object PlayCountRepository {
 
     fun incrementPlayCount(songId: Long) {
         initIfNeeded()
+        Log.d("PlayCountRepository", "incrementPlayCount: $songId")
         val current = prefs.getInt("$PLAY_COUNT_PREFIX$songId", 0)
         prefs.edit().putInt("$PLAY_COUNT_PREFIX$songId", current + 1).apply()
     }

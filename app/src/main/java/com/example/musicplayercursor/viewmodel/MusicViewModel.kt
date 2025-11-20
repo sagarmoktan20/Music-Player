@@ -43,8 +43,8 @@ class MusicViewModel: ViewModel() {
     private var musicService: MusicService? = null
     private var progressUpdateJob: Job? = null
     private var favouritesRepository: FavouritesRepository? = null
-    private var playCountRepository: PlayCountRepository? = null
-    private var lastPlayedRepository: LastPlayedRepository? = null
+    //private var playCountRepository: PlayCountRepository? = null
+   // private var lastPlayedRepository: LastPlayedRepository? = null
     private var playlistRepository: PlaylistRepository? = null
     private var contentObserver: ContentObserver? = null
     private var contentResolver: android.content.ContentResolver? = null
@@ -74,13 +74,13 @@ class MusicViewModel: ViewModel() {
         viewModelScope.launch {
             favouritesRepository = FavouritesRepository(context)
         //    playCountRepository = PlayCountRepository(context)
-            lastPlayedRepository = LastPlayedRepository(context)
+          //  lastPlayedRepository = LastPlayedRepository(context)
             playlistRepository = PlaylistRepository(context)
             val repo = MusicRepository(context.contentResolver)
             val loadedSongs = repo.loadAudio()
             val favouriteIds = favouritesRepository?.getFavouriteSongIds() ?: emptySet()
-            val playCounts = playCountRepository?.getAllPlayCounts() ?: emptyMap()
-            val lastPlayedMap = lastPlayedRepository?.getAllLastPlayed() ?: emptyMap()
+            val playCounts = PlayCountRepository.getAllPlayCounts()
+            val lastPlayedMap = LastPlayedRepository.getAllLastPlayed() ?: emptyMap()
             val playlists = playlistRepository?.getAllPlaylists() ?: emptyList()
 
             // Mark songs as favourite and add play counts based on SharedPreferences
@@ -179,6 +179,27 @@ class MusicViewModel: ViewModel() {
                     val existingSong = _uiState.value.songs.find { it.id == song.id }
                     val updatedSong = existingSong ?: song
                     _uiState.value = _uiState.value.copy(current = updatedSong)
+                    val updatedPlayCount = PlayCountRepository.getPlayCount(song.id)
+                    val updatedLastPlayed = System.currentTimeMillis()
+                    LastPlayedRepository.setLastPlayed(song.id, updatedLastPlayed)
+
+
+                    val oldState = _uiState.value
+
+                    val updatedSongs = oldState.songs.map {
+                        if (it.id == song.id) {
+                            it.copy(
+                                playCount = updatedPlayCount,
+                                lastPlayed = updatedLastPlayed
+                            )
+                        } else it
+                    }
+
+                    _uiState.value = oldState.copy(
+                        songs = updatedSongs,
+                        current = updatedSongs.first { it.id == song.id }
+                    )
+
                 }
             }
 
@@ -213,22 +234,20 @@ class MusicViewModel: ViewModel() {
         val service = musicService ?: return
 
         // Initialize repositories if needed
-        if (playCountRepository == null) {
-
-           // playCountRepository = PlayCountRepository(context)
-            if (playCountRepository == null){
-                Log.d("MusicViewModel", "play: playCountRepository is null")
-            }
-        }
-        if (lastPlayedRepository == null) {
-            lastPlayedRepository = LastPlayedRepository(context)
-        }
+//        if (playCountRepository == null) {
+//
+//           // playCountRepository = PlayCountRepository(context)
+//
+//        }
+//        if (lastPlayedRepository == null) {
+//            lastPlayedRepository = LastPlayedRepository(context)
+//        }
 
         // Increment play count
-        playCountRepository?.incrementPlayCount(song.id)
+        PlayCountRepository.incrementPlayCount(song.id)
         // Update last played timestamp
         val now = System.currentTimeMillis()
-        lastPlayedRepository?.setLastPlayed(song.id, now)
+        LastPlayedRepository.setLastPlayed(song.id, now)
 
         // Get the favourite status and updated play count from the song list or current song
         val existingSong = _uiState.value.songs.find { it.id == song.id }
@@ -270,16 +289,43 @@ class MusicViewModel: ViewModel() {
             currentQueueSongIds = queueSongIds
             currentQueueSource = source
         }
-        
+
         val service = musicService ?: return
         
         // Resolve songs from current songs list
-        val songs = _uiState.value.songs.filter { queueSongIds?.contains(it.id) == true }
+        val songs = queueSongIds
+            ?.mapNotNull { id -> _uiState.value.songs.find { it.id == id } }
+            ?: emptyList()
         val startIndex = songs.indexOfFirst { it.id == startSongId }
-        
+        Log.d("QueueDebug", "Queue order (VM): ${songs.map { it.playCount }}")
+
         if (startIndex >= 0) {
+            val song = songs[startIndex]
+
+            // 🔥 ADD THIS TO FIX PLAY COUNT
+            PlayCountRepository.incrementPlayCount(song.id)
+
+            // 🔥 Update last played
+            val now = System.currentTimeMillis()
+            LastPlayedRepository.setLastPlayed(song.id, now)
+
+            // 🔥 Update song in UI state
+            val updatedSongs = _uiState.value.songs.map {
+                if (it.id == song.id) it.copy(playCount = it.playCount + 1, lastPlayed = now)
+                else it
+            }
+
+            _uiState.value = _uiState.value.copy(
+                songs = updatedSongs,
+                current = song.copy(
+                    playCount = song.playCount + 1,
+                    lastPlayed = now
+                ),
+                isPlaying = true
+            )
             service.playPlaylist(songs, startIndex)
         }
+
     }
 
     fun togglePlayPause() {
@@ -397,7 +443,7 @@ class MusicViewModel: ViewModel() {
           //  if (playlistRepository == null) playlistRepository = PlaylistRepository(context)
             if (favouritesRepository == null) favouritesRepository = FavouritesRepository(context)
            // if (playCountRepository == null) playCountRepository = PlayCountRepository(context)
-            if (lastPlayedRepository == null) lastPlayedRepository = LastPlayedRepository(context)
+           // if (lastPlayedRepository == null) lastPlayedRepository = LastPlayedRepository(context)
 
             val resolver = context.contentResolver
             val urisToDelete = mutableListOf<Uri>()
