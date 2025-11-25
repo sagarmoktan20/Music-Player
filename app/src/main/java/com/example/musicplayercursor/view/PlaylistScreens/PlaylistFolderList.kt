@@ -42,6 +42,7 @@ import androidx.compose.runtime.LaunchedEffect
 private data class PlaylistFolderItem(
     val id: String? = null,
     val title: String,
+    val isSelectionMode: Boolean = false,
     val isCreateNew: Boolean = false
 )
 

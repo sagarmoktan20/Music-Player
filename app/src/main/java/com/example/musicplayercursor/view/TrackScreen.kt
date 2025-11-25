@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RepeatOne
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material3.Button
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -35,6 +36,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -53,7 +55,10 @@ fun TrackScreen(
     onNext: () -> Unit,
     onSeek: (Long) -> Unit,
     onToggleFavourite: () -> Unit,
-    onToggleLoop: () -> Unit
+    onToggleLoop: () -> Unit,
+    isReceiverMode: Boolean = false,
+    isConnectedToBroadcast: Boolean = false,
+    onDisconnect: () -> Unit = {}  // ADD THIS PARAMETER
 ) {
     var isUserSeeking by remember { mutableStateOf(false) }
     var seekPosition by remember { mutableStateOf(0f) }
@@ -74,6 +79,47 @@ fun TrackScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.SpaceEvenly
     ) {
+        // Show "Connected to Broadcast" banner in receiver mode
+        // Show "Connected to Broadcast" banner in receiver mode
+        if (isReceiverMode && isConnectedToBroadcast) {
+            Column(
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    shape = MaterialTheme.shapes.small,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp)
+                ) {
+                    Text(
+                        text = "Connected to Broadcast",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(8.dp)
+                    )
+                }
+
+                // Disconnect button
+                 Button(
+                    onClick = onDisconnect,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text(
+                        text = "Disconnect from Broadcast",
+                        color = MaterialTheme.colorScheme.onError
+                    )
+                }
+            }
+        }
         // 1. Album Art Placeholder
         Surface(
             modifier = Modifier
@@ -138,14 +184,19 @@ fun TrackScreen(
             Slider(
                 value = sliderPosition,
                 onValueChange = { newValue ->
-                    isUserSeeking = true
-                    seekPosition = newValue
+                    if (!isReceiverMode) {
+                        isUserSeeking = true
+                        seekPosition = newValue
+                    }
                 },
                 onValueChangeFinished = {
-                    val newPosition = (seekPosition * duration).toLong()
-                    onSeek(newPosition)
-                    isUserSeeking = false
+                    if (!isReceiverMode) {
+                        val newPosition = (seekPosition * duration).toLong()
+                        onSeek(newPosition)
+                        isUserSeeking = false
+                    }
                 },
+                enabled = !isReceiverMode,
                 modifier = Modifier.fillMaxWidth()
             )
 
@@ -175,11 +226,19 @@ fun TrackScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             // Loop
-            IconButton(onClick = onToggleLoop) {
+            IconButton(
+                onClick = onToggleLoop,
+                enabled = !isReceiverMode
+            ) {
                 Icon(
                     imageVector = Icons.Default.RepeatOne,
                     contentDescription = "Loop",
-                    tint = if (isLooping) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                    tint = if (isReceiverMode) 
+                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                    else if (isLooping) 
+                        MaterialTheme.colorScheme.primary 
+                    else 
+                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
                     modifier = Modifier.size(28.dp)
                 )
             }
@@ -187,11 +246,16 @@ fun TrackScreen(
             // Previous
             IconButton(
                 onClick = onPrevious,
+                enabled = !isReceiverMode,
                 modifier = Modifier.size(48.dp)
             ) {
                 Icon(
                     imageVector = Icons.Default.SkipPrevious,
                     contentDescription = "Previous",
+                    tint = if (isReceiverMode) 
+                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                    else 
+                        Color.Unspecified,
                     modifier = Modifier.size(36.dp)
                 )
             }
@@ -199,11 +263,16 @@ fun TrackScreen(
             // Play/Pause (Prominent)
             FilledIconButton(
                 onClick = onToggle,
+                enabled = !isReceiverMode,
                 modifier = Modifier.size(72.dp)
             ) {
                 Icon(
                     imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                     contentDescription = if (isPlaying) "Pause" else "Play",
+                    tint = if (isReceiverMode) 
+                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                    else 
+                        Color.Unspecified,
                     modifier = Modifier.size(40.dp)
                 )
             }
@@ -211,21 +280,34 @@ fun TrackScreen(
             // Next
             IconButton(
                 onClick = onNext,
+                enabled = !isReceiverMode,
                 modifier = Modifier.size(48.dp)
             ) {
                 Icon(
                     imageVector = Icons.Default.SkipNext,
                     contentDescription = "Next",
+                    tint = if (isReceiverMode) 
+                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                    else 
+                        Color.Unspecified,
                     modifier = Modifier.size(36.dp)
                 )
             }
 
             // Favourite
-            IconButton(onClick = onToggleFavourite) {
+            IconButton(
+                onClick = onToggleFavourite,
+                enabled = !isReceiverMode
+            ) {
                 Icon(
                     imageVector = if (isFavourite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
                     contentDescription = "Favourite",
-                    tint = if (isFavourite) androidx.compose.ui.graphics.Color.Red else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                    tint = if (isReceiverMode) 
+                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                    else if (isFavourite) 
+                        Color.Red 
+                    else 
+                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
                     modifier = Modifier.size(28.dp)
                 )
             }

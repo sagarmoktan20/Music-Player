@@ -14,8 +14,11 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -37,10 +40,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.musicplayercursor.R
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.size
 import com.example.musicplayercursor.model.Song
 import com.example.musicplayercursor.model.Playlist
 import com.example.musicplayercursor.view.CreatePlaylistDialog
 import com.example.musicplayercursor.view.FavouritesScreen
+import com.example.musicplayercursor.view.SelectionBottomBar
+import com.example.musicplayercursor.view.DeleteConfirmationDialog
 
 private data class PlaylistFolderUi(
     val id: String? = null,
@@ -60,11 +66,17 @@ private data class PlaylistFolderUi(
         onCreatePlaylist: (String) -> Unit = {},
         onLoadPlaylists: () -> Unit = {},
         onPlaylistClicked: (String) -> Unit = {},
-        onDefaultFolderOpened: (String?) -> Unit = {}
+        onDefaultFolderOpened: (String?) -> Unit = {},
+        onDeletePlaylist: (String) -> Unit = {}
     ) {
         val context = LocalContext.current
         var showCreateDialog by remember { mutableStateOf(false) }
         var opened by remember { mutableStateOf<String?>(null) }
+        
+        // Playlist selection mode state (separate from song selection mode)
+        var isPlaylistSelectionMode by remember { mutableStateOf(false) }
+        var selectedPlaylistIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+        var showDeletePlaylistDialog by remember { mutableStateOf(false) }
         
         // Notify parent when default folder open state changes
         LaunchedEffect(opened) {
@@ -91,6 +103,12 @@ private data class PlaylistFolderUi(
         val allFolders = (defaultFolders + userPlaylists + listOf(
             PlaylistFolderUi(title = "New playlist", isAddFolder = true)
         ))
+        
+        // Back handler for playlist selection mode
+        BackHandler(enabled = isPlaylistSelectionMode && opened == null) {
+            isPlaylistSelectionMode = false
+            selectedPlaylistIds = emptySet()
+        }
 
         when (opened) {
             "Recently added" -> {
@@ -138,33 +156,78 @@ private data class PlaylistFolderUi(
                 )
             }
             else -> {
-                Surface(tonalElevation = 0.dp) {
-                    LazyVerticalGrid(
-                        columns = GridCells.Fixed(2),
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        contentPadding = PaddingValues(bottom = 12.dp)
-                    ) {
-                        items(allFolders, key = { it.id ?: it.title }) { folder ->
-                            PlaylistFolderCard(
-                                folder = folder,
-                                onClick = {
-                                    if (folder.isAddFolder) {
-                                        showCreateDialog = true
-                                    } else {
-                                        // Check if it's a user-created playlist or default folder
-                                        if (folder.id != null) {
-                                            // User-created playlist - open playlist songs screen
-                                            onPlaylistClicked(folder.id)
+                Box(modifier = Modifier.fillMaxSize()) {
+                    Surface(tonalElevation = 0.dp) {
+                        LazyVerticalGrid(
+                            columns = GridCells.Fixed(2),
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            contentPadding = PaddingValues(
+                                bottom = if (isPlaylistSelectionMode && selectedPlaylistIds.isNotEmpty()) 80.dp else 12.dp
+                            )
+                        ) {
+                            items(allFolders, key = { it.id ?: it.title }) { folder ->
+                                val isUserPlaylist = folder.id != null && !folder.isAddFolder
+                                val isSelected = folder.id != null && selectedPlaylistIds.contains(folder.id)
+                                
+                                PlaylistFolderCard(
+                                    folder = folder,
+                                    isSelected = isSelected,
+                                    isSelectionMode = isPlaylistSelectionMode,
+                                    canSelect = isUserPlaylist,
+                                    onClick = {
+                                        if (isPlaylistSelectionMode && isUserPlaylist) {
+                                            // Toggle selection in selection mode
+                                            selectedPlaylistIds = if (isSelected) {
+                                                selectedPlaylistIds - folder.id!!
+                                            } else {
+                                                selectedPlaylistIds + folder.id!!
+                                            }
+                                            // Exit selection mode if no playlists selected
+                                            if (selectedPlaylistIds.isEmpty()) {
+                                                isPlaylistSelectionMode = false
+                                            }
+                                        } else if (folder.isAddFolder) {
+                                            showCreateDialog = true
                                         } else {
-                                            // Default folder
-                                            opened = folder.title
+                                            // Check if it's a user-created playlist or default folder
+                                            if (folder.id != null) {
+                                                // User-created playlist - open playlist songs screen
+                                                onPlaylistClicked(folder.id)
+                                            } else {
+                                                // Default folder
+                                                opened = folder.title
+                                            }
+                                        }
+                                    },
+                                    onLongClick = {
+                                        // Only allow long press on user-created playlists
+                                        if (isUserPlaylist) {
+                                            isPlaylistSelectionMode = true
+                                            selectedPlaylistIds = setOf(folder.id!!)
                                         }
                                     }
-                                }
+                                )
+                            }
+                        }
+                    }
+                    
+                    // Show SelectionBottomBar when in playlist selection mode
+                    if (isPlaylistSelectionMode && selectedPlaylistIds.isNotEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .fillMaxWidth()
+                        ) {
+                            SelectionBottomBar(
+                                selectedCount = selectedPlaylistIds.size,
+                                onShare = null,
+                                onDelete = { showDeletePlaylistDialog = true },
+                                onRemove = null,
+                                onAdd = null
                             )
                         }
                     }
@@ -182,14 +245,44 @@ private data class PlaylistFolderUi(
                 }
             )
         }
+        
+        // Show delete playlist confirmation dialog
+        if (showDeletePlaylistDialog) {
+            DeleteConfirmationDialog(
+                songCount = selectedPlaylistIds.size,
+                onDismiss = { showDeletePlaylistDialog = false },
+                onConfirm = {
+                    // Delete all selected playlists
+                    selectedPlaylistIds.forEach { playlistId ->
+                        onDeletePlaylist(playlistId)
+                    }
+                    // Reset selection mode
+                    isPlaylistSelectionMode = false
+                    selectedPlaylistIds = emptySet()
+                    showDeletePlaylistDialog = false
+                }
+            )
+        }
     }
 
 
 @Composable
-private fun PlaylistFolderCard(folder: PlaylistFolderUi, onClick: () -> Unit) {
+private fun PlaylistFolderCard(
+    folder: PlaylistFolderUi,
+    isSelected: Boolean = false,
+    isSelectionMode: Boolean = false,
+    canSelect: Boolean = false,
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null
+) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(
+                if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+                else Color.Transparent
+            )
     ) {
         Box(
             contentAlignment = Alignment.Center,
@@ -197,9 +290,34 @@ private fun PlaylistFolderCard(folder: PlaylistFolderUi, onClick: () -> Unit) {
                 .fillMaxWidth()
                 .aspectRatio(1f)
                 .clip(RoundedCornerShape(16.dp))
-                .background(Color(0xFFF2F2F2))
-                .clickable { onClick() }
+                .background(
+                    if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                    else Color(0xFFF2F2F2)
+                )
+                .then(
+                    if (onLongClick != null && canSelect) {
+                        Modifier.combinedClickable(
+                            onClick = onClick,
+                            onLongClick = onLongClick
+                        )
+                    } else {
+                        Modifier.clickable { onClick() }
+                    }
+                )
         ) {
+            // Show selection indicator in selection mode for selectable playlists
+            if (isSelectionMode && canSelect) {
+                Icon(
+                    imageVector = if (isSelected) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
+                    contentDescription = if (isSelected) "Selected" else "Not selected",
+                    tint = if (isSelected) MaterialTheme.colorScheme.primary else Color.Gray,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(8.dp)
+                        .size(24.dp)
+                )
+            }
+            
             if (folder.isAddFolder) {
                 Icon(
                     imageVector = Icons.Default.Add,
@@ -223,7 +341,16 @@ private fun PlaylistFolderCard(folder: PlaylistFolderUi, onClick: () -> Unit) {
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(top = 8.dp)
-                .clickable { onClick() }
+                .then(
+                    if (onLongClick != null && canSelect) {
+                        Modifier.combinedClickable(
+                            onClick = onClick,
+                            onLongClick = onLongClick
+                        )
+                    } else {
+                        Modifier.clickable { onClick() }
+                    }
+                )
         )
     }
 }

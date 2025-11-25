@@ -45,15 +45,15 @@ fun DeleteConfirmationDialog(
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 Text(
-                    text = "Delete songs?",
+                    text = "Delete Item?",
                     style = MaterialTheme.typography.titleLarge
                 )
                 
                 Text(
                     text = if (songCount == 1) {
-                        "This song will be permanently deleted from your device."
+                        "This item will be permanently deleted from your device."
                     } else {
-                        "$songCount songs will be permanently deleted from your device."
+                        "$songCount items will be permanently deleted from your device."
                     },
                     style = MaterialTheme.typography.bodyMedium,
                     textAlign = TextAlign.Start

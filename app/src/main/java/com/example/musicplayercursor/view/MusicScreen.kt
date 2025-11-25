@@ -22,12 +22,16 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.Divider
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -44,6 +48,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.activity.compose.BackHandler
+import androidx.compose.material3.Button
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -60,20 +65,31 @@ import com.example.musicplayercursor.R   // <-- replace with your actual package
 import com.example.musicplayercursor.view.PlaylistScreens.PlaylistsScreen
 import com.example.musicplayercursor.view.PlaylistScreens.PlaylistFolderList
 import com.example.musicplayercursor.view.PlaylistScreens.PlaylistSongsScreen
+import com.example.musicplayercursor.view.SearchScreen
+import com.example.musicplayercursor.view.BroadcastDialog
+import com.example.musicplayercursor.view.BroadcastScreen
+import com.example.musicplayercursor.view.ConnectBottomSheet
+import com.example.musicplayercursor.viewmodel.BroadcastViewModel
+import com.example.musicplayercursor.viewmodel.ConnectViewModel
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MusicScreen(
 	viewModel: MusicViewModel,
 	permissionViewModel: PermissionViewModel,
+	broadcastViewModel: BroadcastViewModel,
+	connectViewModel: ConnectViewModel,
 	onRequestSongs: () -> Unit,
 	onPlay: (Song) -> Unit,
 	onToggle: () -> Unit
 ): Unit {
 	val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 	val context = LocalContext.current
+	val connectState by connectViewModel.connectState.collectAsStateWithLifecycle()
+
 
 	val hasPermission by permissionViewModel.hasAudioPermission.collectAsStateWithLifecycle()
+	var showConnectBottomSheet by remember { mutableStateOf(false) }
 
 	LaunchedEffect(Unit) {
 		permissionViewModel.refreshPermissionStatus(context)
@@ -90,6 +106,25 @@ fun MusicScreen(
 	var selectedPlaylistId by remember { mutableStateOf<String?>(null) }
 	var showDeleteDialog by remember { mutableStateOf(false) }
 	var openedDefaultFolder by remember { mutableStateOf<String?>(null) }
+	var showSearchScreen by remember { mutableStateOf(false) }
+	var showMenu by remember { mutableStateOf(false) }
+	var showBroadcastDialog by remember { mutableStateOf(false) }
+	var showBroadcastScreen by remember { mutableStateOf(false) }
+	
+	val broadcastState by broadcastViewModel.broadcastState.collectAsStateWithLifecycle()
+	// Auto-open TrackScreen when receiver connects
+
+	LaunchedEffect(connectState.isConnected) {
+		if (connectState.isConnected) {
+			showTrackScreen = true  // Automatically open TrackScreen when connected
+		}
+	}
+	// Auto-show BroadcastScreen when broadcast starts
+	LaunchedEffect(broadcastState.isBroadcasting) {
+		if (broadcastState.isBroadcasting) {
+			showBroadcastScreen = true
+		}
+	}
 	
 	// Handle back button in selection mode
 	BackHandler(enabled = uiState.isSelectionMode && !showPlaylistFolderList && selectedPlaylistId == null) {
@@ -110,6 +145,11 @@ fun MusicScreen(
 			// Otherwise, exit the playlist view
 			selectedPlaylistId = null
 		}
+	}
+	
+	// Handle back button for search screen
+	BackHandler(enabled = showSearchScreen) {
+		showSearchScreen = false
 	}
 
 	Scaffold(
@@ -134,22 +174,64 @@ fun MusicScreen(
 						},
 						onAdd = { showPlaylistFolderList = true }
 					)
-				} else if (uiState.current != null) {
-					// Show now playing bar when not in selection mode
+				} else {
+					// ALWAYS show now playing bar (even when empty or in receiver mode)
+					val hasCurrentSong = uiState.current != null
+					val isReceiverMode = connectState.isConnected
+
+					// Determine title and artist
+					val title = when {
+						isReceiverMode -> "BroadCasted Song.mp3"  // Receiver mode: always show this
+						hasCurrentSong -> uiState.current!!.title  // Local song
+						else -> "No song playing"  // Empty state
+					}
+
+					val artist = when {
+						isReceiverMode -> {
+							connectState.broadcastSongInfo?.title ?: "Broadcasting..."  // Show broadcaster's song if available
+						}
+						hasCurrentSong -> uiState.current!!.artist  // Local song
+						else -> "Tap a song to play"  // Empty state
+					}
+
+					val isPlaying = if (isReceiverMode) {
+						connectState.broadcastSongInfo?.isPlaying ?: false
+					} else {
+						uiState.isPlaying
+					}
+
 					NowPlayingBar(
-						title = uiState.current!!.title,
-						artist = uiState.current!!.artist,
-						isPlaying = uiState.isPlaying,
-						onToggle = onToggle,
-						onPrevious = { viewModel.playPreviousSong(context) },
-						onNext = { viewModel.playNextSong(context) },
-						onClick = { showTrackScreen = true }
+						title = title,
+						artist = artist,
+						isPlaying = isPlaying,
+						isEmpty = !hasCurrentSong && !isReceiverMode,  // Empty = no local song AND not in receiver mode
+						onToggle = { if (hasCurrentSong || isReceiverMode) onToggle() },
+						onPrevious = { if (hasCurrentSong && !isReceiverMode) viewModel.playPreviousSong(context) },
+						onNext = { if (hasCurrentSong && !isReceiverMode) viewModel.playNextSong(context) },
+						onClick = {
+							if (hasCurrentSong || isReceiverMode) {
+								showTrackScreen = true  // Open TrackScreen for both local songs and receiver mode
+							}
+						}
 					)
 				}
 			}
 		}
 	) { padding ->
-		if (showPlaylistFolderList) {
+		if (showSearchScreen) {
+			BackHandler(onBack = { showSearchScreen = false })
+			Box(
+				modifier = Modifier
+					.fillMaxSize()
+					.padding(padding)
+			) {
+				SearchScreen(
+					allSongs = uiState.songs,
+					viewModel = viewModel,
+					onBack = { showSearchScreen = false }
+				)
+			}
+		} else if (showPlaylistFolderList) {
 			Box(
 				modifier = Modifier
 					.fillMaxSize()
@@ -183,30 +265,68 @@ fun MusicScreen(
 					onDefaultFolderOpened = { folder: String? -> openedDefaultFolder = folder }
 				)
 			}
-		} else if (showTrackScreen && uiState.current != null) {
-			BackHandler(onBack = { showTrackScreen = false })
+		} else if ((showTrackScreen && uiState.current != null) || connectState.isConnected) {
+			// Prevent back navigation when in receiver mode
+			if (connectState.isConnected) {
+				BackHandler(enabled = true) {
+					// Disabled - user must disconnect to go back
+				}
+			} else {
+				BackHandler(onBack = { showTrackScreen = false })
+			}
+
 			Box(
 				modifier = Modifier
 					.fillMaxSize()
 					.padding(padding)
 			) {
+				// Determine title and artist based on receiver mode
+				val title = if (connectState.isConnected) {
+					"BroadCasted Song.mp3"  // Always show this in receiver mode
+				} else {
+					uiState.current!!.title  // Normal local song
+				}
+
+				val artist = if (connectState.isConnected) {
+					connectState.broadcastSongInfo?.title ?: "Broadcasting..."  // Show broadcaster's song info if available
+				} else {
+					uiState.current!!.artist  // Normal local song
+				}
+
+				val isReceiverMode = connectState.isConnected
+
 				TrackScreen(
-					title = uiState.current!!.title,
-					artist = uiState.current!!.artist,
-					isPlaying = uiState.isPlaying,
-					currentPosition = uiState.currentPosition,
-					duration = uiState.duration,
-					isFavourite = uiState.current!!.isFavourite,
-					isLooping = uiState.isLooping,
+					title = title,
+					artist = artist,
+					isPlaying = if (isReceiverMode) {
+						connectState.broadcastSongInfo?.isPlaying ?: false  // Use broadcast state
+					} else {
+						uiState.isPlaying  // Use local state
+					},
+					currentPosition = if (isReceiverMode) {
+						connectState.broadcastSongInfo?.positionMs ?: 0L  // Use broadcast position
+					} else {
+						uiState.currentPosition  // Use local position
+					},
+					duration = if (isReceiverMode) {
+						connectState.broadcastSongInfo?.durationMs ?: 0L  // Use broadcast duration
+					} else {
+						uiState.duration  // Use local duration
+					},
+					isFavourite = if (isReceiverMode) false else uiState.current!!.isFavourite,  // No favourite in receiver mode
+					isLooping = if (isReceiverMode) false else uiState.isLooping,  // No loop in receiver mode
 					onToggle = onToggle,
-					onPrevious = { viewModel.playPreviousSong(context) },
-					onNext = { viewModel.playNextSong(context) },
-					onSeek = { position -> viewModel.seekTo(position) },
-					onToggleFavourite = { viewModel.toggleFavourite(context, uiState.current!!) },
-					onToggleLoop = { viewModel.toggleLoop() }
+					onPrevious = { if (!isReceiverMode) viewModel.playPreviousSong(context) },
+					onNext = { if (!isReceiverMode) viewModel.playNextSong(context) },
+					onSeek = { position -> if (!isReceiverMode) viewModel.seekTo(position) },
+					onToggleFavourite = { if (!isReceiverMode) viewModel.toggleFavourite(context, uiState.current!!) },
+					onToggleLoop = { if (!isReceiverMode) viewModel.toggleLoop() },
+					isReceiverMode = isReceiverMode,
+					isConnectedToBroadcast = connectState.isConnected,
+					onDisconnect = { connectViewModel.disconnectFromBroadcast(viewModel) }  // ADD THIS
 				)
 			}
-		} else if (selectedPlaylistId != null) {
+		}else if (selectedPlaylistId != null) {
 			Box(
 				modifier = Modifier
 					.fillMaxSize()
@@ -238,7 +358,109 @@ fun MusicScreen(
 					.fillMaxSize()
 					.padding(padding)
 			) {
-				TabRow(selectedTabIndex = pagerState.currentPage) {
+				// Header row - show "Stop Broadcast" button when broadcasting, "Disconnect" when connected, otherwise "Music Player" text
+				Row(
+					modifier = Modifier
+						.fillMaxWidth()
+						.padding(horizontal = 16.dp, vertical = 8.dp),
+					horizontalArrangement = Arrangement.SpaceBetween,
+					verticalAlignment = Alignment.CenterVertically
+				) {
+					// Show "Stop Broadcast" button when broadcasting, "Disconnect" when connected, otherwise "Music Player" text
+					if (broadcastState.isBroadcasting) {
+						Button(
+							onClick = {
+								broadcastViewModel.stopBroadcast(context)
+							}
+						) {
+							Text("Stop Broadcast")
+						}
+					} else if (connectState.isConnected) {
+						Button(
+							onClick = {
+								connectViewModel.disconnectFromBroadcast(viewModel)
+							},
+							colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+							 containerColor = MaterialTheme.colorScheme.error
+							)
+						) {
+							Text("Disconnect", color = MaterialTheme.colorScheme.onError)
+						}
+					} else {
+						Text(
+							text = "Music Player",
+							style = MaterialTheme.typography.titleLarge
+						)
+					}
+					
+					// Search icon and Menu icon on the right
+					Row(
+						horizontalArrangement = Arrangement.spacedBy(8.dp),
+						verticalAlignment = Alignment.CenterVertically
+					) {
+						// Search icon
+						IconButton(onClick = { showSearchScreen = true }) {
+							Icon(
+								imageVector = Icons.Default.Search,
+								contentDescription = "Search"
+							)
+						}
+						
+						// Three-dot menu icon
+						Box {
+							IconButton(onClick = { showMenu = true }) {
+								Icon(
+									imageVector = Icons.Default.MoreVert,
+									contentDescription = "Menu"
+								)
+							}
+							
+							// Dropdown menu
+							DropdownMenu(
+								expanded = showMenu,
+								onDismissRequest = { showMenu = false }
+							) {
+								DropdownMenuItem(
+									text = { Text("Broadcast") },
+									onClick = {
+										showMenu = false
+										if (broadcastViewModel.isHotspotActive()) {
+											// Hotspot is active, start broadcast
+											broadcastViewModel.startBroadcast(context)
+										} else {
+											// Show dialog to enable hotspot
+											showBroadcastDialog = true
+										}
+									}
+								)
+								DropdownMenuItem(
+									text = { Text("Connect") },
+									onClick = {
+										showMenu = false
+										showConnectBottomSheet = true
+									},
+									enabled = !connectState.isConnected && !broadcastState.isBroadcasting
+								)
+							}
+						}
+					}
+				}
+				
+				// Show BroadcastScreen content when broadcasting and showBroadcastScreen is true, otherwise show tabs and pager
+				if (broadcastState.isBroadcasting && showBroadcastScreen) {
+					BroadcastScreen(
+						viewModel = broadcastViewModel,
+						onStop = {
+							broadcastViewModel.stopBroadcast(context)
+							showBroadcastScreen = false
+						},
+						onBack = {
+							// Just hide BroadcastScreen, don't stop broadcast
+							showBroadcastScreen = false
+						}
+					)
+				} else {
+					TabRow(selectedTabIndex = pagerState.currentPage) {
 					tabs.forEachIndexed { index, title ->
 						Tab(
 							selected = pagerState.currentPage == index,
@@ -293,6 +515,14 @@ fun MusicScreen(
 								},
 								onDefaultFolderOpened = { folder ->
 									openedDefaultFolder = folder
+								},
+								onDeletePlaylist = { playlistId ->
+									viewModel.deletePlaylist(context, playlistId)
+									viewModel.loadPlaylists(context)
+									// If the deleted playlist was open, close it
+									if (selectedPlaylistId == playlistId) {
+										selectedPlaylistId = null
+									}
 								}
 							)
 						}
@@ -329,8 +559,30 @@ fun MusicScreen(
 						}
 					}
 				}
+				}
 			}
 		}
+	}
+	
+	// Broadcast dialog
+	if (showBroadcastDialog) {
+		BroadcastDialog(
+			viewModel = broadcastViewModel,
+			onDismiss = { showBroadcastDialog = false }
+		)
+	}
+	
+	// Connect bottom sheet
+	if (showConnectBottomSheet) {
+		BackHandler(onBack = { showConnectBottomSheet = false })
+		ConnectBottomSheet(
+			connectViewModel = connectViewModel,
+			musicViewModel = viewModel,
+			onDismiss = { showConnectBottomSheet = false },
+			onConnected = {
+				showConnectBottomSheet = false
+			}
+		)
 	}
 	
 	// Delete confirmation dialog
@@ -423,15 +675,23 @@ private fun NowPlayingBar(
 	title: String,
 	artist: String,
 	isPlaying: Boolean,
+	isEmpty: Boolean = false,  // ADD THIS PARAMETER
 	onToggle: () -> Unit,
 	onPrevious: () -> Unit,
 	onNext: () -> Unit,
 	onClick: () -> Unit
 ) {
-	Surface(shape = RoundedCornerShape(36.dp),
+	Surface(
+		shape = RoundedCornerShape(36.dp),
 		tonalElevation = 2.dp,
-		shadowElevation = 4.dp,                    // optional: a little lift
-		modifier = Modifier.fillMaxWidth()) {
+		shadowElevation = 4.dp,
+		modifier = Modifier.fillMaxWidth(),
+		color = if (isEmpty) {
+			MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)  // Dimmed when empty
+		} else {
+			MaterialTheme.colorScheme.surface
+		}
+	) {
 		Row(
 			modifier = Modifier
 				.fillMaxWidth()
@@ -439,11 +699,17 @@ private fun NowPlayingBar(
 			horizontalArrangement = Arrangement.SpaceBetween,
 			verticalAlignment = Alignment.CenterVertically
 		) {
-			// Song info - clickable to open TrackScreen
+			// Song info - clickable only when NOT empty
 			Column(
 				modifier = Modifier
 					.weight(1f)
-					.clickable { onClick() }
+					.then(
+						if (!isEmpty) {
+							Modifier.clickable { onClick() }
+						} else {
+							Modifier  // No click when empty
+						}
+					)
 			) {
 				Row(
 					verticalAlignment = Alignment.CenterVertically,
@@ -452,57 +718,96 @@ private fun NowPlayingBar(
 					// Music icon
 					Icon(
 						painter = painterResource(id = R.drawable.music),
-						contentDescription = "Song",//
-						tint = Color.Unspecified,
+						contentDescription = "Song",
+						tint = if (isEmpty) {
+							MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)  // Dimmed when empty
+						} else {
+							Color.Unspecified
+						},
 						modifier = Modifier
 							.size(40.dp)
 							.padding(end = 8.dp)
 					)
-				Text(
-					title,
-					style = MaterialTheme.typography.bodyLarge,
-					maxLines = 1,
-					overflow = TextOverflow.Ellipsis
-				)}
+					Text(
+						title,
+						style = MaterialTheme.typography.bodyLarge,
+						maxLines = 1,
+						overflow = TextOverflow.Ellipsis,
+						color = if (isEmpty) {
+							MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)  // Dimmed when empty
+						} else {
+							MaterialTheme.colorScheme.onSurface
+						}
+					)
+				}
 				Text(
 					artist,
 					style = MaterialTheme.typography.bodyMedium,
 					maxLines = 1,
-					overflow = TextOverflow.Ellipsis
+					overflow = TextOverflow.Ellipsis,
+					color = if (isEmpty) {
+						MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)  // Dimmed when empty
+					} else {
+						MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+					}
 				)
 			}
-			
+
 			Spacer(Modifier.width(8.dp))
-			
-			// Playback controls
+
+			// Playback controls - disabled when empty
 			Row(
 				horizontalArrangement = Arrangement.spacedBy(4.dp),
 				verticalAlignment = Alignment.CenterVertically
 			) {
 				// Previous button
-				IconButton(onClick = onPrevious) {
+				IconButton(
+					onClick = onPrevious,
+					enabled = !isEmpty  // Disable when empty
+				) {
 					Icon(
 						imageVector = Icons.Default.SkipPrevious,
 						contentDescription = "Previous",
-						modifier = Modifier.size(28.dp)
+						modifier = Modifier.size(28.dp),
+						tint = if (isEmpty) {
+							MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)  // Dimmed when disabled
+						} else {
+							Color.Unspecified
+						}
 					)
 				}
-				
+
 				// Play/Pause button
-				IconButton(onClick = onToggle) {
+				IconButton(
+					onClick = onToggle,
+					enabled = !isEmpty  // Disable when empty
+				) {
 					Icon(
 						imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
 						contentDescription = if (isPlaying) "Pause" else "Play",
-						modifier = Modifier.size(32.dp)
+						modifier = Modifier.size(32.dp),
+						tint = if (isEmpty) {
+							MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)  // Dimmed when empty
+						} else {
+							Color.Unspecified
+						}
 					)
 				}
-				
+
 				// Next button
-				IconButton(onClick = onNext) {
+				IconButton(
+					onClick = onNext,
+					enabled = !isEmpty  // Disable when empty
+				) {
 					Icon(
 						imageVector = Icons.Default.SkipNext,
 						contentDescription = "Next",
-						modifier = Modifier.size(28.dp)
+						modifier = Modifier.size(28.dp),
+						tint = if (isEmpty) {
+							MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)  // Dimmed when disabled
+						} else {
+							Color.Unspecified
+						}
 					)
 				}
 			}

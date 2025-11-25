@@ -25,10 +25,10 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun SelectionBottomBar(
     selectedCount: Int,
-    onShare: () -> Unit,
+    onShare: (() -> Unit)? = null,
 	onDelete: () -> Unit,
 	onRemove: (() -> Unit)? = null,
-    onAdd: () -> Unit,
+    onAdd: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     Surface(
@@ -53,13 +53,15 @@ fun SelectionBottomBar(
             
             Spacer(modifier = Modifier.width(8.dp))
             
-            // Share button
-            IconButton(onClick = onShare) {
-                Icon(
-                    imageVector = Icons.Default.Share,
-                    contentDescription = "Share",
-                    modifier = Modifier.size(24.dp)
-                )
+            // Share button - only show if callback is provided
+            if (onShare != null) {
+                IconButton(onClick = onShare) {
+                    Icon(
+                        imageVector = Icons.Default.Share,
+                        contentDescription = "Share",
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
             }
             
 			// Delete or Remove button
@@ -82,13 +84,15 @@ fun SelectionBottomBar(
 				}
 			}
             
-            // Add button
-            IconButton(onClick = onAdd) {
-                Icon(
-                    imageVector = Icons.Default.Add,
-                    contentDescription = "Add",
-                    modifier = Modifier.size(24.dp)
-                )
+            // Add button - only show if callback is provided
+            if (onAdd != null) {
+                IconButton(onClick = onAdd) {
+                    Icon(
+                        imageVector = Icons.Default.Add,
+                        contentDescription = "Add",
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
             }
         }
     }

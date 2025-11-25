@@ -32,6 +32,8 @@ import com.example.musicplayercursor.viewmodel.MusicViewModel
 import com.example.musicplayercursor.viewmodel.PermissionDialog
 import com.example.musicplayercursor.viewmodel.PermissionViewModel
 import com.example.musicplayercursor.viewmodel.ReadMediaAudio
+import com.example.musicplayercursor.viewmodel.BroadcastViewModel
+import com.example.musicplayercursor.viewmodel.ConnectViewModel
 import com.example.musicplayercursor.service.MusicService
 import androidx.lifecycle.viewmodel.compose.viewModel
 
@@ -78,7 +80,36 @@ class MainActivity : ComponentActivity() {
             MusicPlayercursorTheme {
                 val viewModel: MusicViewModel = MusicViewModel()
                 val permissionViewModel: PermissionViewModel = viewModel()
+                val broadcastViewModel: BroadcastViewModel = viewModel()
+                val connectViewModel: ConnectViewModel = viewModel()
+                broadcastViewModel.setMusicViewModel(viewModel)
                 val dialogQueue = permissionViewModel.visiblePermissionDialogQueue
+               // val viewModel: MusicViewModel = MusicViewModel()
+
+// Pass MusicService to ViewModel when service is connected
+                LaunchedEffect(serviceBound) {
+                    if (serviceBound && musicService != null) {
+                        viewModel.setMusicService(musicService)
+                    }
+                }
+
+// Also update when service connection changes
+                LaunchedEffect(musicService) {
+                    musicService?.let { viewModel.setMusicService(it) }
+                }
+                // Handle deep link intent
+                LaunchedEffect(Unit) {
+                    intent?.data?.let { uri ->
+                        if (uri.scheme == "musicplayer" && uri.host == "broadcast") {
+                            val ip = uri.getQueryParameter("ip")
+                            val token = uri.getQueryParameter("token")
+                            if (ip != null && token != null) {
+                                // Pre-fill connection data (will be shown in ConnectBottomSheet)
+                                // The actual connection will be initiated from ConnectBottomSheet
+                            }
+                        }
+                    }
+                }
 
                 val multiplePermissionResultLauncher = rememberLauncherForActivityResult(
                     contract = ActivityResultContracts.RequestMultiplePermissions(),
@@ -95,12 +126,8 @@ class MainActivity : ComponentActivity() {
                     multiplePermissionResultLauncher.launch(permissionsToRequest)
                 }
                 
-                // Bind service to ViewModel when service is connected
-                LaunchedEffect(serviceBound) {
-                    if (serviceBound && musicService != null) {
-                        viewModel.bindToService(musicService!!)
-                    }
-                }
+                // Service binding is handled separately if needed
+                // The ViewModel manages its own ExoPlayer instance
 
                 if (dialogQueue.isNotEmpty()) {
                     Log.d("DIALOG_DEBUG", "Dialog queue is NOT empty: $dialogQueue")
@@ -137,6 +164,8 @@ class MainActivity : ComponentActivity() {
                     MusicScreen(
                         viewModel = viewModel,
                         permissionViewModel = permissionViewModel,
+                        broadcastViewModel = broadcastViewModel,
+                        connectViewModel = connectViewModel,
                         onRequestSongs = { viewModel.loadSongs(this) },
                         onPlay = { viewModel.play(this, it) },
                         onToggle = { viewModel.togglePlayPause() }
