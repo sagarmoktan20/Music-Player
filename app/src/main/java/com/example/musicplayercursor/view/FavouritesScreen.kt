@@ -30,6 +30,7 @@ fun FavouritesScreen(
     songs: List<Song>,
     isSelectionMode: Boolean,
     selectedSongs: Set<Long>,
+    currentSongId: Long? = null, // ADD THIS: Pass current song ID
     onPlay: (Song) -> Unit,
     onLongPress: (Song) -> Unit,
     onToggleSelection: (Long) -> Unit
@@ -45,6 +46,7 @@ fun FavouritesScreen(
                 song = song,
                 isSelected = isSelected,
                 isSelectionMode = isSelectionMode,
+                isCurrentlyPlaying = currentSongId != null && currentSongId == song.id, // ADD THIS
                 onClick = {
                     if (isSelectionMode) {
                         onToggleSelection(song.id)
@@ -63,16 +65,21 @@ private fun FavouriteSongRow(
     song: Song,
     isSelected: Boolean,
     isSelectionMode: Boolean,
+    isCurrentlyPlaying: Boolean = false, // ADD THIS
     onClick: () -> Unit,
     onLongPress: () -> Unit
 ) {
+    // Determine background color
+    val backgroundColor = when {
+        isSelected -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+        isCurrentlyPlaying -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f)
+        else -> Color.Transparent
+    }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(
-                if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
-                else Color.Transparent
-            )
+            .background(backgroundColor) // MODIFY THIS
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = onLongPress

@@ -71,6 +71,16 @@ import com.example.musicplayercursor.view.BroadcastScreen
 import com.example.musicplayercursor.view.ConnectBottomSheet
 import com.example.musicplayercursor.viewmodel.BroadcastViewModel
 import com.example.musicplayercursor.viewmodel.ConnectViewModel
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.height
+import androidx.compose.material3.AlertDialog
+import androidx.compose.ui.graphics.asImageBitmap
+import com.example.musicplayercursor.util.QRCodeGenerator
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.material3.TextButton
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -90,7 +100,8 @@ fun MusicScreen(
 
 	val hasPermission by permissionViewModel.hasAudioPermission.collectAsStateWithLifecycle()
 	var showConnectBottomSheet by remember { mutableStateOf(false) }
-
+	var showQRDialog by remember { mutableStateOf(false) } // ADD THIS
+	
 	LaunchedEffect(Unit) {
 		permissionViewModel.refreshPermissionStatus(context)
 	}
@@ -152,6 +163,16 @@ fun MusicScreen(
 		showSearchScreen = false
 	}
 
+	// ADD THIS: Generate QR code for the dialog (only when broadcasting)
+	val qrCodeBitmap = remember(broadcastState.serverIP, broadcastState.token, showQRDialog) {
+		if (showQRDialog && broadcastState.serverIP != null && broadcastState.token != null) {
+			val deepLink = "musicplayer://broadcast?ip=${broadcastState.serverIP}&token=${broadcastState.token}"
+			QRCodeGenerator.generateQRCode(deepLink, 512)
+		} else {
+			null
+		}
+	}
+
 	Scaffold(
 		bottomBar = {
 			if (!showTrackScreen) {
@@ -200,20 +221,27 @@ fun MusicScreen(
 						uiState.isPlaying
 					}
 
-					NowPlayingBar(
-						title = title,
-						artist = artist,
-						isPlaying = isPlaying,
-						isEmpty = !hasCurrentSong && !isReceiverMode,  // Empty = no local song AND not in receiver mode
-						onToggle = { if (hasCurrentSong || isReceiverMode) onToggle() },
-						onPrevious = { if (hasCurrentSong && !isReceiverMode) viewModel.playPreviousSong(context) },
-						onNext = { if (hasCurrentSong && !isReceiverMode) viewModel.playNextSong(context) },
-						onClick = {
-							if (hasCurrentSong || isReceiverMode) {
-								showTrackScreen = true  // Open TrackScreen for both local songs and receiver mode
+					// MODIFY THIS: Wrap NowPlayingBar with windowInsetsPadding for consistent placement
+					Box(
+						modifier = Modifier
+							.fillMaxWidth()
+							.windowInsetsPadding(WindowInsets.navigationBars)
+					) {
+						NowPlayingBar(
+							title = title,
+							artist = artist,
+							isPlaying = isPlaying,
+							isEmpty = !hasCurrentSong && !isReceiverMode,  // Empty = no local song AND not in receiver mode
+							onToggle = { if (hasCurrentSong || isReceiverMode) onToggle() },
+							onPrevious = { if (hasCurrentSong && !isReceiverMode) viewModel.playPreviousSong(context) },
+							onNext = { if (hasCurrentSong && !isReceiverMode) viewModel.playNextSong(context) },
+							onClick = {
+								if (hasCurrentSong || isReceiverMode) {
+									showTrackScreen = true  // Open TrackScreen for both local songs and receiver mode
+								}
 							}
-						}
-					)
+						)
+					}
 				}
 			}
 		}
@@ -340,6 +368,7 @@ fun MusicScreen(
 					songs = playlistSongs,
 					isSelectionMode = uiState.isSelectionMode,
 					selectedSongs = uiState.selectedSongs,
+					currentSongId = if (!connectState.isConnected) uiState.current?.id else null, // ADD THIS
 					onPlay = { song ->
 						val queueIds = playlistSongs.map { it.id }
 						viewModel.playFromQueue(context, queueIds, song.id, selectedPlaylistId)
@@ -441,6 +470,16 @@ fun MusicScreen(
 									},
 									enabled = !connectState.isConnected && !broadcastState.isBroadcasting
 								)
+								// ADD THIS: Show QR button (only when broadcasting)
+								if (broadcastState.isBroadcasting) {
+									DropdownMenuItem(
+										text = { Text("Show QR") },
+										onClick = {
+											showMenu = false
+											showQRDialog = true
+										}
+									)
+								}
 							}
 						}
 					}
@@ -481,6 +520,7 @@ fun MusicScreen(
                             songs = favouriteSongs,
                             isSelectionMode = uiState.isSelectionMode,
                             selectedSongs = uiState.selectedSongs,
+                            currentSongId = if (!connectState.isConnected) uiState.current?.id else null, // ADD THIS
                             onPlay = { song ->
                                 val queueIds = favouriteSongs.map { it.id }
                                 viewModel.playFromQueue(context, queueIds, song.id, "favourites")
@@ -538,6 +578,7 @@ fun MusicScreen(
 										song = song,
 										isSelected = uiState.selectedSongs.contains(song.id),
 										isSelectionMode = uiState.isSelectionMode,
+										isCurrentlyPlaying = !connectState.isConnected && uiState.current?.id == song.id, // ADD THIS: Check if this is the current song
 										onClick = {
 											if (uiState.isSelectionMode) {
 												viewModel.toggleSongSelection(song.id)
@@ -596,22 +637,72 @@ fun MusicScreen(
 			}
 		)
 	}
+
+	// QR Code Dialog
+	if (showQRDialog) {
+		AlertDialog(
+			onDismissRequest = { showQRDialog = false },
+			title = {
+				Text("Scan to Connect")
+			},
+			text = {
+				Column(
+					modifier = Modifier
+						.fillMaxWidth()
+						.padding(16.dp),
+					horizontalAlignment = Alignment.CenterHorizontally
+				) {
+					if (qrCodeBitmap != null) {
+						Image(
+							bitmap = qrCodeBitmap.asImageBitmap(),
+							contentDescription = "QR Code for broadcast connection",
+							modifier = Modifier.size(300.dp)
+						)
+//						Spacer(modifier = Modifier.height(16.dp))
+						Spacer(modifier = Modifier.height(16.dp))
+						if (broadcastState.serverIP != null) {
+							Text(
+								text = "${broadcastState.serverIP}:8080",
+								style = MaterialTheme.typography.bodyMedium,
+								textAlign = TextAlign.Center
+							)
+						}
+					} else {
+						Text(
+							text = "Generating QR code...",
+							style = MaterialTheme.typography.bodyMedium
+						)
+					}
+				}
+			},
+			confirmButton = {
+				TextButton(onClick = { showQRDialog = false }) {
+					Text("Close")
+				}
+			}
+		)
+	}
 }
 @Composable
 private fun SongRow(
 	song: Song,
 	isSelected: Boolean,
 	isSelectionMode: Boolean,
+	isCurrentlyPlaying: Boolean = false, // ADD THIS: Parameter to indicate if this is the current song
 	onClick: () -> Unit,
 	onLongPress: () -> Unit
 ) {
+	// Determine background color: selection takes priority, then current song highlight
+	val backgroundColor = when {
+		isSelected -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+		isCurrentlyPlaying -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f) // Lighter highlight for current song
+		else -> Color.Transparent
+	}
+	
 	Column(
 		modifier = Modifier
 			.fillMaxWidth()
-			.background(
-				if (isSelected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
-				else Color.Transparent
-			)
+			.background(backgroundColor) // MODIFY THIS: Use the determined background color
 			.combinedClickable(
 				onClick = onClick,
 				onLongClick = onLongPress

@@ -396,11 +396,25 @@ class ConnectViewModel : ViewModel() {
         // Step 2: Detect song change
         if (lastSongId != null && lastSongId != songInfo.songId) {
             Log.w(TAG, "[syncWithPlayer] SONG CHANGED! Old: $lastSongId → New: ${songInfo.songId}")
-            Log.d(TAG, "[syncWithPlayer] Seeking to position 0 for new song")
-            musicViewModel.seekToReceiver(0L)
+            
+            // MODIFY THIS: Reconnect stream for new song instead of just seeking
+            val serverIP = _connectState.value.serverIP
+            val token = _connectState.value.token
+            if (serverIP != null && token != null) {
+                val newStreamUrl = "http://$serverIP:8080/song?token=$token"
+                Log.d(TAG, "[syncWithPlayer] Reconnecting stream for new song: $newStreamUrl")
+                musicViewModel.disconnectFromBroadcast()
+                delay(100) // Small delay to ensure cleanup
+                musicViewModel.connectToBroadcast(newStreamUrl)
+                delay(300) // Wait for connection to establish
+            } else {
+                Log.w(TAG, "[syncWithPlayer] No server IP or token available, just seeking to 0")
+                musicViewModel.seekToReceiver(0L)
+            }
+            
             lastSeekTime = System.currentTimeMillis() // Reset debounce timer on song change
             lastPosition = 0L // Reset position tracking
-            Log.d(TAG, "[syncWithPlayer] Song change handled: seeked to 0, reset timers")
+            Log.d(TAG, "[syncWithPlayer] Song change handled: stream reconnected, timers reset")
         }
         lastSongId = songInfo.songId
 
@@ -428,6 +442,11 @@ class ConnectViewModel : ViewModel() {
         // Step 6: Choose target position
         val targetPosition = predictedPosition.coerceIn(0L, songInfo.durationMs)
         Log.d(TAG, "[syncWithPlayer] Target position: ${targetPosition}ms (using predicted)")
+
+        // MODIFY THIS: Store the broadcaster's ACTUAL reported position (not predicted) for catch-up after buffering
+        // This prevents overshooting when the receiver buffers and reconnects
+        musicViewModel.updateBroadcasterTargetPosition(songInfo.positionMs) // Use actual position, not predicted
+        Log.d(TAG, "[syncWithPlayer] Stored broadcaster actual position: ${songInfo.positionMs}ms (for buffering catch-up)")
 
         // Step 7: Check drift and seek if needed
         val drift = kotlin.math.abs(targetPosition - currentPos)
@@ -576,73 +595,3 @@ class ConnectViewModel : ViewModel() {
         Log.d(TAG, "<<< [onCleared] Success: ConnectViewModel cleared")
     }
 }
-
-
-//    private suspend fun syncWithPlayer(songInfo: BroadcastSongInfo, musicViewModel: MusicViewModel) {
-//        // Calculate clock offset once
-//        if (clockOffset == null) {
-//            clockOffset = songInfo.serverTimestamp - System.currentTimeMillis()
-//        }
-//
-//        val correctedServerPosition = songInfo.positionMs + (System.currentTimeMillis() + (clockOffset ?: 0L) - songInfo.serverTimestamp)
-//
-//        // Song changed?
-//        if (lastSongId != songInfo.songId) {
-//            Log.w(TAG, "Song changed → ${songInfo.title}")
-//            lastSongId = songInfo.songId
-//            musicViewModel.seekToReceiver(0L) // optional: or seek to corrected position
-//        }
-//
-//        // Seek if drift > 300ms
-//        val currentPos = musicViewModel.getReceiverPosition()
-//        if (kotlin.math.abs(correctedServerPosition - currentPos) > 300) {
-//            Log.d(TAG, "Syncing position: $currentPos → $correctedServerPosition")
-//            musicViewModel.seekToReceiver(correctedServerPosition.coerceIn(0, songInfo.durationMs))
-//        }
-//
-//        // Play/pause sync
-//        val isPlaying = musicViewModel.isReceiverPlaying()
-//        if (isPlaying != songInfo.isPlaying) {
-//            if (songInfo.isPlaying) musicViewModel.playReceiver()
-//            else musicViewModel.pauseReceiver()
-//        }
-//    }
-
-
-
-
-
-//    private suspend fun syncWithPlayer(songInfo: BroadcastSongInfo, musicViewModel: MusicViewModel) {
-//        // Check if song changed
-//        if (lastSongId != null && lastSongId != songInfo.songId) {
-//            // Song changed - seek to beginning of new song
-//            Log.d(TAG, "Song changed: ${songInfo.songId}")
-//            musicViewModel.seekToReceiver(0L)
-//            lastPosition = 0L
-//        }
-//
-//        // Check position difference
-//        val positionDiff = kotlin.math.abs(songInfo.positionMs - lastPosition)
-//
-//        // Only seek if difference is significant (avoid jitter)
-//        if (positionDiff > SYNC_THRESHOLD_MS) {
-//            // For new songs or big jumps, seek immediately
-//            if (lastSongId == null || lastSongId != songInfo.songId || positionDiff > SEEK_THRESHOLD_MS) {
-//                Log.d(TAG, "Seeking to position: ${songInfo.positionMs}ms (diff: ${positionDiff}ms)")
-//                musicViewModel.seekToReceiver(songInfo.positionMs)
-//            }
-//        }
-//
-//        // Sync play/pause state
-//        val isCurrentlyPlaying = musicViewModel.isReceiverPlaying()
-//        if (isCurrentlyPlaying != songInfo.isPlaying) {
-//            Log.d(TAG, "Syncing play state: ${songInfo.isPlaying}")
-//            if (songInfo.isPlaying) {
-//                musicViewModel.playReceiver()
-//            } else {
-//                musicViewModel.pauseReceiver()
-//            }
-//        }
-//
-//        lastPosition = songInfo.positionMs
-//    }

@@ -459,11 +459,28 @@ class MusicViewModel: ViewModel() {
         val currentSong = _uiState.value.current ?: return
         val ids = currentQueueSongIds.ifEmpty { _uiState.value.songs.map { it.id } }
         val currentIndex = ids.indexOf(currentSong.id)
-        if (currentIndex >= 0 && currentIndex < ids.size - 1) {
-            val nextId = ids[currentIndex + 1]
+        
+        // MODIFY THIS: Loop back to first song if at end of queue
+        val nextIndex = if (currentIndex >= 0 && currentIndex < ids.size - 1) {
+            // Normal case: play next song
+            currentIndex + 1
+        } else if (currentIndex >= 0 && currentIndex == ids.size - 1) {
+            // At end of queue: loop back to first song (index 0)
+            Log.d(TAG, "[playNextSong] Reached end of queue, looping back to first song")
+            0
+        } else {
+            // Current song not found in queue: play first song
+            Log.d(TAG, "[playNextSong] Current song not in queue, playing first song")
+            0
+        }
+        
+        val nextId = ids.getOrNull(nextIndex)
+        if (nextId != null) {
             val nextSong = _uiState.value.songs.find { it.id == nextId }
             if (nextSong != null) {
                 play(context, nextSong)
+            } else {
+                Log.w(TAG, "[playNextSong] Next song with id $nextId not found in songs list")
             }
         }
     }
@@ -845,6 +862,10 @@ class MusicViewModel: ViewModel() {
    // private var receiverPlayer: ExoPlayer? = null
     private var isReceiverMode: Boolean = false
     private var receiverProgressJob: Job? = null
+    private var receiverPlaybackMonitorJob: Job? = null
+    private var receiverStreamUrl: String? = null
+    private var broadcasterTargetPosition: Long? = null // ADD THIS: Store broadcaster's position for catch-up after buffering
+    private var isBuffering: Boolean = false // ADD THIS: Track buffering state
     
     companion object {
         private const val RECEIVER_TAG = "ConnectViewModel" // Use ConnectViewModel tag for receiver mode
@@ -863,7 +884,8 @@ class MusicViewModel: ViewModel() {
                 Log.d(RECEIVER_TAG, "[connectToBroadcast] Starting connection to: $streamUrl")
                 val oldReceiverMode = isReceiverMode
                 isReceiverMode = true
-                Log.d(RECEIVER_TAG, "[connectToBroadcast] Receiver mode enabled: $oldReceiverMode -> $isReceiverMode")
+                receiverStreamUrl = streamUrl // ADD THIS: Store URL in class variable
+                Log.d(RECEIVER_TAG, "[connectToBroadcast] Receiver mode enabled: $oldReceiverMode -> $isReceiverMode, streamUrl stored")
 
                 // Create MediaItem with live streaming configuration
                 val mediaItem = MediaItem.Builder()
@@ -904,22 +926,65 @@ class MusicViewModel: ViewModel() {
                                 }
                                 androidx.media3.common.Player.STATE_READY -> {
                                     Log.d(RECEIVER_TAG, "[Receiver Player] ✅ Ready - isPlaying=${isPlaying}, playWhenReady=$playWhenReady")
+                                    
+                                    // MODIFY THIS: Catch up to broadcaster position after buffering/reconnection
+                                    // Use actual broadcaster position (not predicted) to avoid overshooting
+                                    if (isBuffering && broadcasterTargetPosition != null) {
+                                        val broadcasterActualPos = broadcasterTargetPosition!!
+                                        val currentPos = player?.currentPosition ?: 0L
+                                        
+                                        // Calculate how much time passed during buffering (approximate)
+                                        // Add a small buffer (200ms) to catch up smoothly, but don't overshoot
+                                        val catchUpPosition = broadcasterActualPos + 200 // Small buffer to catch up
+                                        val drift = catchUpPosition - currentPos
+                                        
+                                        Log.w(RECEIVER_TAG, "[Receiver Player] 📍 Catching up after buffering: current=${currentPos}ms, broadcasterActual=${broadcasterActualPos}ms, catchUpTarget=${catchUpPosition}ms, drift=${drift}ms")
+                                        
+                                        // Only seek if we're significantly behind (don't seek if we're ahead or close)
+                                        if (drift > 300) { // Only seek if behind by more than 300ms
+                                            viewModelScope.launch {
+                                                delay(50) // Small delay to ensure player is ready
+                                                player?.seekTo(catchUpPosition.coerceAtLeast(0L))
+                                                Log.d(RECEIVER_TAG, "[Receiver Player] ✅ Caught up: seeked to ${catchUpPosition}ms (actual broadcaster was at ${broadcasterActualPos}ms)")
+                                            }
+                                        } else if (drift < -200) {
+                                            // We're ahead - log but don't seek back (let it catch up naturally or wait for sync)
+                                            Log.w(RECEIVER_TAG, "[Receiver Player] ⚠️ Receiver is ahead by ${-drift}ms, will sync naturally")
+                                        } else {
+                                            Log.d(RECEIVER_TAG, "[Receiver Player] ✅ Position is close (drift=${drift}ms), no seek needed")
+                                        }
+                                        
+                                        isBuffering = false
+                                        broadcasterTargetPosition = null // Clear after use
+                                    }
                                 }
                                 androidx.media3.common.Player.STATE_ENDED -> {
-                                    Log.w(RECEIVER_TAG, "[Receiver Player] ⚠️ Playback ended - reconnecting stream...")
-                                    // CRITICAL FIX: Reconnect stream when it ends using the reconnect function
+                                    Log.w(RECEIVER_TAG, "[Receiver Player] ⚠️ Playback ended")
+                                    
+                                    // MODIFY THIS: Only reconnect if we're not at the end of the song
+                                    // Check if we're near the end (within last 5 seconds) - if so, wait for next song
+                                    val duration = player?.duration ?: 0L
+                                    val currentPos = player?.currentPosition ?: 0L
+                                    val isNearEnd = duration > 0 && currentPos >= (duration - 5000) // Within last 5 seconds
+                                    
                                     if (isReceiverMode && playWhenReady) {
-                                        // Remove this listener temporarily to prevent loop
-                                        player?.removeListener(this)
-                                        
-                                        // Use the reconnectReceiverStream function for consistent reconnection
-                                        reconnectReceiverStream()
-                                        
-                                        // Re-add listener after a delay to allow reconnection to complete
-                                        viewModelScope.launch {
-                                            delay(500)
-                                            player?.addListener(endedStateListener!!)
-                                            Log.d(RECEIVER_TAG, "[Receiver Player] Listener re-added after reconnection")
+                                        if (isNearEnd) {
+                                            Log.d(RECEIVER_TAG, "[Receiver Player] Near end of song (pos=$currentPos, duration=$duration), waiting for next song...")
+                                            // Don't reconnect - wait for next song from broadcaster
+                                        } else {
+                                            Log.w(RECEIVER_TAG, "[Receiver Player] Playback ended unexpectedly, reconnecting stream...")
+                                            // Remove this listener temporarily to prevent loop
+                                            player?.removeListener(this)
+                                            
+                                            // Use the reconnectReceiverStream function for consistent reconnection
+                                            reconnectReceiverStream()
+                                            
+                                            // Re-add listener after a delay to allow reconnection to complete
+                                            viewModelScope.launch {
+                                                delay(500)
+                                                player?.addListener(endedStateListener!!)
+                                                Log.d(RECEIVER_TAG, "[Receiver Player] Listener re-added after reconnection")
+                                            }
                                         }
                                     }
                                 }
@@ -999,7 +1064,8 @@ class MusicViewModel: ViewModel() {
         Log.d(RECEIVER_TAG, ">>> [MusicViewModel.disconnectFromBroadcast] Entry")
         val oldReceiverMode = isReceiverMode
         isReceiverMode = false
-        Log.d(RECEIVER_TAG, "[disconnectFromBroadcast] Receiver mode disabled: $oldReceiverMode -> $isReceiverMode")
+        receiverStreamUrl = null // ADD THIS: Clear URL when disconnecting
+        Log.d(RECEIVER_TAG, "[disconnectFromBroadcast] Receiver mode disabled: $oldReceiverMode -> $isReceiverMode, streamUrl cleared")
 
 
         receiverPlaybackMonitorJob?.cancel()
@@ -1052,7 +1118,7 @@ class MusicViewModel: ViewModel() {
      */
     fun playReceiver() {
         val p = player ?: run {
-            Log.e(RECEIVER_TAG, "[playReceiver] Player is null!")
+            Log.e(RECEIVER_TAG, "!!! [playReceiver] Player is null!")
             return
         }
 
@@ -1062,6 +1128,13 @@ class MusicViewModel: ViewModel() {
         val wasPlaying = p.isPlaying
 
         Log.d(RECEIVER_TAG, "[playReceiver] State: playbackState=$playbackState, isReady=$isReady, wasPlaying=$wasPlaying")
+
+        // ADD THIS: Check if player is in ENDED state and reconnect if needed
+        if (playbackState == androidx.media3.common.Player.STATE_ENDED) {
+            Log.w(RECEIVER_TAG, "[playReceiver] Player is in ENDED state, reconnecting stream...")
+            reconnectReceiverStream()
+            return
+        }
 
         if (!isReady && playbackState == androidx.media3.common.Player.STATE_IDLE) {
             Log.w(RECEIVER_TAG, "[playReceiver] Player is IDLE, preparing...")
@@ -1139,9 +1212,6 @@ class MusicViewModel: ViewModel() {
     /**
      * Start progress updates for receiver mode
      */
-
-    // Add this variable near receiverProgressJob
-    private var receiverPlaybackMonitorJob: Job? = null
 
     private fun startReceiverProgressUpdates() {
         Log.d(RECEIVER_TAG, ">>> [startReceiverProgressUpdates] Entry")
@@ -1244,7 +1314,8 @@ class MusicViewModel: ViewModel() {
 
     // Add this helper function to reconnect stream
     private fun reconnectReceiverStream() {
-        val streamUrl = CurrentSongRepository.getReceiverStreamUrl()
+        // MODIFY THIS: Use class variable first, fallback to repository
+        val streamUrl = receiverStreamUrl ?: CurrentSongRepository.getReceiverStreamUrl()
         if (streamUrl == null) {
             Log.e(RECEIVER_TAG, "!!! [reconnectReceiverStream] No stream URL available!")
             return
@@ -1255,11 +1326,16 @@ class MusicViewModel: ViewModel() {
                 Log.w(RECEIVER_TAG, "[reconnectReceiverStream] Reconnecting to: $streamUrl")
                 val p = player ?: return@launch
 
-                val currentPos = p.currentPosition.coerceAtLeast(0L)
+                // MODIFY THIS: Use broadcaster's actual position with small buffer (200ms) to catch up
+                // Don't use predicted position to avoid overshooting
+                val broadcasterActualPos = broadcasterTargetPosition ?: p.currentPosition.coerceAtLeast(0L)
+                val catchUpPosition = broadcasterActualPos + 200 // Small buffer to catch up smoothly
+                Log.d(RECEIVER_TAG, "[reconnectReceiverStream] Reconnect position: actual=${broadcasterActualPos}ms, catchUp=${catchUpPosition}ms, current=${p.currentPosition}ms")
 
                 // Stop and clear
                 p.stop()
                 p.clearMediaItems()
+                isBuffering = true // Mark as buffering
 
                 // Create new MediaItem
                 val newMediaItem = MediaItem.Builder()
@@ -1275,16 +1351,28 @@ class MusicViewModel: ViewModel() {
                 p.setMediaItem(newMediaItem)
                 p.prepare()
 
-                // Wait for prepare and seek
+                // Wait for prepare and seek to broadcaster's actual position with small buffer
                 delay(200)
-                p.seekTo(currentPos)
+                p.seekTo(catchUpPosition.coerceAtLeast(0L))
                 p.playWhenReady = true
                 p.play()
 
-                Log.d(RECEIVER_TAG, "[reconnectReceiverStream] ✅ Stream reconnected at position $currentPos")
+                Log.d(RECEIVER_TAG, "[reconnectReceiverStream] ✅ Stream reconnected at position ${catchUpPosition}ms (broadcaster actual: ${broadcasterActualPos}ms)")
             } catch (e: Exception) {
                 Log.e(RECEIVER_TAG, "!!! [reconnectReceiverStream] Error reconnecting", e)
+                isBuffering = false
             }
+        }
+    }
+
+    /**
+     * Update broadcaster target position (called from ConnectViewModel)
+     * Stores the broadcaster's actual reported position for catch-up after buffering
+     */
+    fun updateBroadcasterTargetPosition(positionMs: Long) {
+        if (isReceiverMode) {
+            broadcasterTargetPosition = positionMs
+            Log.d(RECEIVER_TAG, "[updateBroadcasterTargetPosition] Updated target: ${positionMs}ms")
         }
     }
 
