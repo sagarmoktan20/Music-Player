@@ -82,20 +82,25 @@ class MainActivity : ComponentActivity() {
                 val permissionViewModel: PermissionViewModel = viewModel()
                 val broadcastViewModel: BroadcastViewModel = viewModel()
                 val connectViewModel: ConnectViewModel = viewModel()
-                broadcastViewModel.setMusicViewModel(viewModel)
                 val dialogQueue = permissionViewModel.visiblePermissionDialogQueue
                // val viewModel: MusicViewModel = MusicViewModel()
 
-// Pass MusicService to ViewModel when service is connected
+// Pass MusicService to ViewModels when service is connected
                 LaunchedEffect(serviceBound) {
                     if (serviceBound && musicService != null) {
                         viewModel.setMusicService(musicService)
+                        connectViewModel.setMusicService(musicService)
+                        broadcastViewModel.setMusicService(musicService)
                     }
                 }
 
 // Also update when service connection changes
                 LaunchedEffect(musicService) {
-                    musicService?.let { viewModel.setMusicService(it) }
+                    musicService?.let { service ->
+                        viewModel.setMusicService(service)
+                        connectViewModel.setMusicService(service)
+                        broadcastViewModel.setMusicService(service)
+                    }
                 }
                 // Handle deep link intent
                 LaunchedEffect(Unit) {

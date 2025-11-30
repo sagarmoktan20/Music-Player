@@ -46,7 +46,6 @@ private const val CONNECT_UI_TAG = "ConnectViewModel" // Use same tag as Connect
 @Composable
 fun ConnectBottomSheet(
     connectViewModel: ConnectViewModel,
-    musicViewModel: MusicViewModel,
     onDismiss: () -> Unit,
     onConnected: () -> Unit
 ) {
@@ -81,7 +80,7 @@ fun ConnectBottomSheet(
                 Log.d(CONNECT_UI_TAG, "[ConnectBottomSheet] Network check: isOnHotspot=$isOnHotspot")
                 if (isOnHotspot) {
                     Log.d(CONNECT_UI_TAG, "[ConnectBottomSheet] On hotspot network, connecting...")
-                    connectViewModel.connectToBroadcast(ip, token, musicViewModel,context)
+                    connectViewModel.connectToBroadcast(ip, token, context)
                 } else {
                     Log.w(CONNECT_UI_TAG, "⚠️ [ConnectBottomSheet] Not on hotspot network, showing dialog")
                     showNetworkDialog = true
@@ -118,7 +117,7 @@ fun ConnectBottomSheet(
                 val token = scannedToken ?: manualToken
                 Log.d(CONNECT_UI_TAG, "[ConnectBottomSheet] Connecting with: ip=$ip, token=$token")
                 if (ip.isNotEmpty() && token.isNotEmpty()) {
-                    connectViewModel.connectToBroadcast(ip, token, musicViewModel,context)
+                    connectViewModel.connectToBroadcast(ip, token, context)
                     Log.d(CONNECT_UI_TAG, "[ConnectBottomSheet] Connection initiated")
                 } else {
                     Log.w(CONNECT_UI_TAG, "⚠️ [ConnectBottomSheet] IP or token is empty, cannot connect")
@@ -260,7 +259,7 @@ fun ConnectBottomSheet(
                                         Log.d(CONNECT_UI_TAG, "[ConnectBottomSheet] Network check: isOnHotspot=$isOnHotspot")
                                         if (isOnHotspot) {
                                             Log.d(CONNECT_UI_TAG, "[ConnectBottomSheet] On hotspot network, connecting...")
-                                            connectViewModel.connectToBroadcast(manualIP, manualToken, musicViewModel,context)
+                                            connectViewModel.connectToBroadcast(manualIP, manualToken, context)
                                         } else {
                                             Log.w(CONNECT_UI_TAG, "⚠️ [ConnectBottomSheet] Not on hotspot network, showing dialog")
                                             showNetworkDialog = true

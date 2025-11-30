@@ -351,7 +351,7 @@ fun MusicScreen(
 					onToggleLoop = { if (!isReceiverMode) viewModel.toggleLoop() },
 					isReceiverMode = isReceiverMode,
 					isConnectedToBroadcast = connectState.isConnected,
-					onDisconnect = { connectViewModel.disconnectFromBroadcast(viewModel) }  // ADD THIS
+					onDisconnect = { connectViewModel.disconnectFromBroadcast() }
 				)
 			}
 		}else if (selectedPlaylistId != null) {
@@ -407,7 +407,7 @@ fun MusicScreen(
 					} else if (connectState.isConnected) {
 						Button(
 							onClick = {
-								connectViewModel.disconnectFromBroadcast(viewModel)
+								connectViewModel.disconnectFromBroadcast()
 							},
 							colors = androidx.compose.material3.ButtonDefaults.buttonColors(
 							 containerColor = MaterialTheme.colorScheme.error
@@ -618,7 +618,6 @@ fun MusicScreen(
 		BackHandler(onBack = { showConnectBottomSheet = false })
 		ConnectBottomSheet(
 			connectViewModel = connectViewModel,
-			musicViewModel = viewModel,
 			onDismiss = { showConnectBottomSheet = false },
 			onConnected = {
 				showConnectBottomSheet = false

@@ -212,7 +212,7 @@ class BroadcastService : Service() {
                                 Log.d(TAG, "[HTTP GET /song] Partial content: bytes $startByte-${fileSize - 1}/$fileSize")
                             } else {
                                 call.response.status(HttpStatusCode.OK)
-                                Log.d(TAG, "[HTTP GET /song] Full content: ${fileSize} bytes")
+                                Log.d(TAG, "[HTTP GET /song] Full content: $fileSize bytes")
                             }
 
                             // Remove or comment out Content-Length header for streaming
@@ -271,7 +271,8 @@ class BroadcastService : Service() {
                                 }
                             })
                             Log.i(TAG, "<<< [HTTP GET /song] Success: Stream sent to $remoteHost")
-                        } ?: run {
+                        }
+                            ?: run {
                             Log.e(TAG, "!!! [HTTP GET /song] Error: Cannot open file descriptor for ${song.contentUri}")
                             call.respond(HttpStatusCode.InternalServerError, "Cannot open file")
                         }

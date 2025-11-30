@@ -46,12 +46,18 @@ class ConnectViewModel : ViewModel() {
     private var webSocketJob: Job? = null
     private var webSocketSession: WebSocketSession? = null
     private var httpClient: HttpClient? = null
+    private var musicService: com.example.musicplayercursor.service.MusicService? = null
     private var lastSongId: Long? = null
     private var lastPosition: Long = 0L
     private var lastSeekTime: Long = 0L
     private val json = Json {
         ignoreUnknownKeys = true
         isLenient = true
+    }
+    
+    fun setMusicService(service: com.example.musicplayercursor.service.MusicService?) {
+        musicService = service
+        Log.d(TAG, "[setMusicService] Service set: ${service != null}")
     }
 
     init {
@@ -141,10 +147,19 @@ class ConnectViewModel : ViewModel() {
     /**
      * Connect to broadcast server
      */
-    fun connectToBroadcast(ip: String, token: String, musicViewModel: MusicViewModel, context: Context) {        Log.d(TAG, ">>> [connectToBroadcast] Entry: ip=$ip, token=$token")
+    fun connectToBroadcast(ip: String, token: String, context: Context) {
+        Log.d(TAG, ">>> [connectToBroadcast] Entry: ip=$ip, token=$token")
         val currentState = _connectState.value
         if (currentState.isConnecting || currentState.isConnected) {
             Log.w(TAG, "⚠️ [connectToBroadcast] Already connecting or connected: isConnecting=${currentState.isConnecting}, isConnected=${currentState.isConnected}")
+            return
+        }
+        
+        if (musicService == null) {
+            Log.e(TAG, "!!! [connectToBroadcast] MusicService is null!")
+            _connectState.value = _connectState.value.copy(
+                connectionError = "MusicService not available"
+            )
             return
         }
         
@@ -165,18 +180,12 @@ class ConnectViewModel : ViewModel() {
                 val streamUrl = "http://$ip:8080/song?token=$token"
                 Log.d(TAG, "[connectToBroadcast] Stream URL built: $streamUrl")
                 
-                // Prepare ExoPlayer
-                Log.d(TAG, "[connectToBroadcast] Preparing ExoPlayer...")
-                musicViewModel.preparePlayer(context)
-                Log.d(TAG, "[connectToBroadcast] ExoPlayer prepared")
-                
-                // Start ExoPlayer with stream URL
-                Log.d(TAG, "[connectToBroadcast] Initializing ExoPlayer with stream URL...")
-                musicViewModel.connectToBroadcast(streamUrl)
-                Log.d(TAG, "[connectToBroadcast] ExoPlayer initialized with stream URL successfully")
+                // Connect via MusicService
+                Log.d(TAG, "[connectToBroadcast] Connecting via MusicService...")
+                musicService?.connectToBroadcast(streamUrl)
+                Log.d(TAG, "[connectToBroadcast] MusicService connection initiated")
 
                 // Set isConnected = true FIRST, before starting polling
-// This ensures the polling loop doesn't exit immediately
                 val oldStateBeforeConnect = _connectState.value
                 _connectState.value = _connectState.value.copy(
                     isConnected = true,
@@ -185,33 +194,31 @@ class ConnectViewModel : ViewModel() {
                 Log.d(TAG, "[ConnectState] Changed: isConnected=${oldStateBeforeConnect.isConnected} -> ${_connectState.value.isConnected}")
                 Log.d(TAG, "[ConnectState] Changed: isConnecting=${oldStateBeforeConnect.isConnecting} -> ${_connectState.value.isConnecting}")
 
-// NOW start WebSocket sync - the loop will see isConnected = true
+                // NOW start WebSocket sync
                 Log.d(TAG, "[connectToBroadcast] Starting WebSocket sync...")
-                startWebSocketSync(ip, token, musicViewModel)
-                Log.d(TAG, "[ConnectState] Changed: isConnected=${oldStateBeforeConnect.isConnected} -> ${_connectState.value.isConnected}")
-                Log.d(TAG, "[ConnectState] Changed: isConnecting=${oldStateBeforeConnect.isConnecting} -> ${_connectState.value.isConnecting}")
+                startWebSocketSync(ip, token)
                 
                 Log.i(TAG, "<<< [connectToBroadcast] Success: Connected to broadcast successfully")
-                } catch (e: Exception) {
-                    Log.e(TAG, "!!! [connectToBroadcast] Error connecting to broadcast: ${e.message}", e)
-                    Log.e(TAG, "!!! [connectToBroadcast] Error details: ${e.javaClass.simpleName}")
-                    e.printStackTrace()
-                    
-                    val oldErrorState = _connectState.value
-                    _connectState.value = _connectState.value.copy(
-                        isConnecting = false,
-                        connectionError = e.message ?: "Connection failed"
-                    )
-                    Log.d(TAG, "[ConnectState] Error state set: connectionError=${_connectState.value.connectionError}")
-                    Log.d(TAG, "[ConnectState] Changed: isConnecting=${oldErrorState.isConnecting} -> ${_connectState.value.isConnecting}")
-                }
+            } catch (e: Exception) {
+                Log.e(TAG, "!!! [connectToBroadcast] Error connecting to broadcast: ${e.message}", e)
+                Log.e(TAG, "!!! [connectToBroadcast] Error details: ${e.javaClass.simpleName}")
+                e.printStackTrace()
+                
+                val oldErrorState = _connectState.value
+                _connectState.value = _connectState.value.copy(
+                    isConnecting = false,
+                    connectionError = e.message ?: "Connection failed"
+                )
+                Log.d(TAG, "[ConnectState] Error state set: connectionError=${_connectState.value.connectionError}")
+                Log.d(TAG, "[ConnectState] Changed: isConnecting=${oldErrorState.isConnecting} -> ${_connectState.value.isConnecting}")
+            }
         }
     }
     
     /**
      * Start WebSocket sync for real-time state synchronization
      */
-    private fun startWebSocketSync(ip: String, token: String, musicViewModel: MusicViewModel) {
+    private fun startWebSocketSync(ip: String, token: String) {
         Log.d(TAG, ">>> [startWebSocketSync] Entry: ip=$ip, token=$token")
         webSocketJob?.cancel()
         // Close WebSocket session in coroutine
@@ -315,9 +322,9 @@ class ConnectViewModel : ViewModel() {
                                     Log.w(TAG, "[startWebSocketSync] Broadcast song changed: ${oldSongInfo?.songId} -> ${songInfo.songId}")
                                 }
                                 
-                                // Sync with ExoPlayer
+                                // Sync with MusicService
                                 Log.d(TAG, "[startWebSocketSync] Calling syncWithPlayer...")
-                                syncWithPlayer(songInfo, musicViewModel)
+                                syncWithPlayer(songInfo)
                                 Log.d(TAG, "[startWebSocketSync] syncWithPlayer completed")
                                 
                             } catch (e: Exception) {
@@ -360,7 +367,7 @@ class ConnectViewModel : ViewModel() {
                             connectionError = "Connection lost: ${e.message}"
                         )
                         Log.d(TAG, "[ConnectState] Connection error set: ${_connectState.value.connectionError}")
-                        disconnectFromBroadcast(musicViewModel)
+                        disconnectFromBroadcast()
                         break
                     }
                     
@@ -378,11 +385,11 @@ class ConnectViewModel : ViewModel() {
     }
     
     /**
-     * Sync ExoPlayer state with broadcaster state
+     * Sync MusicService state with broadcaster state
      */
     private var clockOffset: Long? = null // server time - local time
 
-    private suspend fun syncWithPlayer(songInfo: BroadcastSongInfo, musicViewModel: MusicViewModel) {
+    private suspend fun syncWithPlayer(songInfo: BroadcastSongInfo) {
         Log.d(TAG, ">>> [syncWithPlayer] Entry: songId=${songInfo.songId}, position=${songInfo.positionMs}ms, isPlaying=${songInfo.isPlaying}, serverTime=${songInfo.serverTimestamp}")
         
         // Step 1: Calculate clock offset (only once)
@@ -397,19 +404,19 @@ class ConnectViewModel : ViewModel() {
         if (lastSongId != null && lastSongId != songInfo.songId) {
             Log.w(TAG, "[syncWithPlayer] SONG CHANGED! Old: $lastSongId → New: ${songInfo.songId}")
             
-            // MODIFY THIS: Reconnect stream for new song instead of just seeking
+            // Reconnect stream for new song
             val serverIP = _connectState.value.serverIP
             val token = _connectState.value.token
-            if (serverIP != null && token != null) {
+            if (serverIP != null && token != null && musicService != null) {
                 val newStreamUrl = "http://$serverIP:8080/song?token=$token"
                 Log.d(TAG, "[syncWithPlayer] Reconnecting stream for new song: $newStreamUrl")
-                musicViewModel.disconnectFromBroadcast()
+                musicService?.disconnectFromBroadcast()
                 delay(100) // Small delay to ensure cleanup
-                musicViewModel.connectToBroadcast(newStreamUrl)
+                musicService?.connectToBroadcast(newStreamUrl)
                 delay(300) // Wait for connection to establish
             } else {
                 Log.w(TAG, "[syncWithPlayer] No server IP or token available, just seeking to 0")
-                musicViewModel.seekToReceiver(0L)
+                musicService?.seekToReceiver(0L)
             }
             
             lastSeekTime = System.currentTimeMillis() // Reset debounce timer on song change
@@ -419,7 +426,7 @@ class ConnectViewModel : ViewModel() {
         lastSongId = songInfo.songId
 
         // Step 3: Get current receiver position
-        val currentPos = musicViewModel.getReceiverPosition()
+        val currentPos = musicService?.getReceiverPosition() ?: 0L
         Log.d(TAG, "[syncWithPlayer] Current receiver position: ${currentPos}ms")
 
         // Step 4: Calculate predicted position
@@ -443,9 +450,8 @@ class ConnectViewModel : ViewModel() {
         val targetPosition = predictedPosition.coerceIn(0L, songInfo.durationMs)
         Log.d(TAG, "[syncWithPlayer] Target position: ${targetPosition}ms (using predicted)")
 
-        // MODIFY THIS: Store the broadcaster's ACTUAL reported position (not predicted) for catch-up after buffering
-        // This prevents overshooting when the receiver buffers and reconnects
-        musicViewModel.updateBroadcasterTargetPosition(songInfo.positionMs) // Use actual position, not predicted
+        // Store the broadcaster's ACTUAL reported position (not predicted) for catch-up after buffering
+        musicService?.updateBroadcasterTargetPosition(songInfo.positionMs)
         Log.d(TAG, "[syncWithPlayer] Stored broadcaster actual position: ${songInfo.positionMs}ms (for buffering catch-up)")
 
         // Step 7: Check drift and seek if needed
@@ -460,7 +466,7 @@ class ConnectViewModel : ViewModel() {
 
         if (significantDrift && canSeek && largeEnoughDrift) {
             Log.w(TAG, "[syncWithPlayer] LARGE DRIFT DETECTED: $drift ms → SEEKING TO $targetPosition ms (current: ${currentPos}ms)")
-            musicViewModel.seekToReceiver(targetPosition)
+            musicService?.seekToReceiver(targetPosition)
             lastSeekTime = System.currentTimeMillis()
             lastPosition = targetPosition
             Log.d(TAG, "[syncWithPlayer] Seek completed: new position=$targetPosition, lastSeekTime updated")
@@ -473,18 +479,18 @@ class ConnectViewModel : ViewModel() {
         }
 
         // Step 8: Sync play/pause state
-        val isCurrentlyPlaying = musicViewModel.isReceiverPlaying()
+        val isCurrentlyPlaying = musicService?.isReceiverPlaying() ?: false
         Log.d(TAG, "[syncWithPlayer] Play state: broadcaster=${songInfo.isPlaying}, receiver=$isCurrentlyPlaying")
         
         if (isCurrentlyPlaying != songInfo.isPlaying) {
             if (songInfo.isPlaying) {
                 Log.w(TAG, "[syncWithPlayer] ⏯️ PLAY command → receiver was paused, starting playback NOW")
-                musicViewModel.playReceiver()
-                Log.d(TAG, "[syncWithPlayer] Play command sent to ExoPlayer")
+                musicService?.playReceiver()
+                Log.d(TAG, "[syncWithPlayer] Play command sent to MusicService")
             } else {
                 Log.w(TAG, "[syncWithPlayer] ⏸️ PAUSE command → receiver was playing, pausing NOW")
-                musicViewModel.pauseReceiver()
-                Log.d(TAG, "[syncWithPlayer] Pause command sent to ExoPlayer")
+                musicService?.pauseReceiver()
+                Log.d(TAG, "[syncWithPlayer] Pause command sent to MusicService")
             }
         } else {
             Log.d(TAG, "[syncWithPlayer] Play state already in sync: ${songInfo.isPlaying}")
@@ -505,7 +511,7 @@ class ConnectViewModel : ViewModel() {
     /**
      * Disconnect from broadcast
      */
-    fun disconnectFromBroadcast(musicViewModel: MusicViewModel) {
+    fun disconnectFromBroadcast() {
         Log.d(TAG, ">>> [disconnectFromBroadcast] Entry")
         val oldState = _connectState.value
         Log.d(TAG, "[disconnectFromBroadcast] Current state: isConnected=${oldState.isConnected}, isConnecting=${oldState.isConnecting}, serverIP=${oldState.serverIP}, token=${oldState.token}")
@@ -536,10 +542,10 @@ class ConnectViewModel : ViewModel() {
         webSocketSession = null
         Log.d(TAG, "[disconnectFromBroadcast] WebSocket session cleared")
         
-        // Stop ExoPlayer receiver mode
-        Log.d(TAG, "[disconnectFromBroadcast] Stopping ExoPlayer receiver mode...")
-        musicViewModel.disconnectFromBroadcast()
-        Log.d(TAG, "[disconnectFromBroadcast] ExoPlayer disconnected")
+        // Stop MusicService receiver mode
+        Log.d(TAG, "[disconnectFromBroadcast] Stopping MusicService receiver mode...")
+        musicService?.disconnectFromBroadcast()
+        Log.d(TAG, "[disconnectFromBroadcast] MusicService disconnected")
         
         _connectState.value = ConnectState()
         Log.d(TAG, "[ConnectState] Reset to initial state: isConnected=false, serverIP=null, token=null")

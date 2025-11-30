@@ -33,7 +33,7 @@ class BroadcastViewModel : ViewModel() {
     private var currentContext: Context? = null
     private var broadcastService: BroadcastService? = null
     private var serviceBound = false
-    private var musicViewModel: MusicViewModel? = null
+    private var musicService: com.example.musicplayercursor.service.MusicService? = null
     
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
@@ -112,14 +112,14 @@ class BroadcastViewModel : ViewModel() {
     }
     
     /**
-     * Set MusicViewModel for playback state access
+     * Set MusicService for playback state access
      */
-    fun setMusicViewModel(viewModel: MusicViewModel) {
-        Log.d(TAG, ">>> [setMusicViewModel] Entry")
-        val oldValue = musicViewModel != null
-        musicViewModel = viewModel
-        Log.d(TAG, "[setMusicViewModel] musicViewModel set: ${if (oldValue) "updated" else "initial"}")
-        Log.d(TAG, "<<< [setMusicViewModel] Success")
+    fun setMusicService(service: com.example.musicplayercursor.service.MusicService?) {
+        Log.d(TAG, ">>> [setMusicService] Entry")
+        val oldValue = musicService != null
+        musicService = service
+        Log.d(TAG, "[setMusicService] musicService set: ${if (oldValue) "updated" else "initial"}")
+        Log.d(TAG, "<<< [setMusicService] Success")
     }
     
     /**
@@ -182,36 +182,37 @@ class BroadcastViewModel : ViewModel() {
 
     private fun setPlaybackStateCallback(context: Context) {
         Log.d(TAG, ">>> [setPlaybackStateCallback] Entry")
-        if (musicViewModel == null) {
-            Log.e(TAG, "!!! [setPlaybackStateCallback] Error: FATAL: musicViewModel is NULL — cannot set playback callback!")
+        if (musicService == null) {
+            Log.e(TAG, "!!! [setPlaybackStateCallback] Error: FATAL: musicService is NULL — cannot set playback callback!")
             return
         }
 
-        Log.d(TAG, "[setPlaybackStateCallback] musicViewModel is READY")
-        val currentSong = musicViewModel?.uiState?.value?.current
-        val currentPosition = musicViewModel?.uiState?.value?.currentPosition ?: 0L
-        val duration = musicViewModel?.uiState?.value?.duration ?: 0L
-        val isPlaying = musicViewModel?.uiState?.value?.isPlaying ?: false
+        Log.d(TAG, "[setPlaybackStateCallback] musicService is READY")
+        val playbackState = musicService?.playbackState?.value
+        val currentSong = playbackState?.currentSong
+        val currentPosition = playbackState?.currentPosition ?: 0L
+        val duration = playbackState?.duration ?: 0L
+        val isPlaying = playbackState?.isPlaying ?: false
         Log.d(TAG, "[setPlaybackStateCallback] Current playback state: song=${currentSong?.title}, position=${currentPosition}ms, duration=${duration}ms, isPlaying=$isPlaying")
 
         val callback = object : BroadcastService.PlaybackStateCallback {
             override fun getCurrentSong(): Song? {
-                val song = musicViewModel?.uiState?.value?.current
+                val song = musicService?.playbackState?.value?.currentSong
                 Log.d(TAG, "[PlaybackStateCallback.getCurrentSong] Called: song=${song?.title} (id=${song?.id})")
                 return song
             }
             override fun getCurrentPosition(): Long {
-                val pos = musicViewModel?.uiState?.value?.currentPosition ?: 0L
+                val pos = musicService?.playbackState?.value?.currentPosition ?: 0L
                 Log.d(TAG, "[PlaybackStateCallback.getCurrentPosition] Called: position=$pos ms")
                 return pos
             }
             override fun getDuration(): Long {
-                val dur = musicViewModel?.uiState?.value?.duration ?: 0L
+                val dur = musicService?.playbackState?.value?.duration ?: 0L
                 Log.d(TAG, "[PlaybackStateCallback.getDuration] Called: duration=$dur ms")
                 return dur
             }
             override fun isPlaying(): Boolean {
-                val playing = musicViewModel?.uiState?.value?.isPlaying ?: false
+                val playing = musicService?.playbackState?.value?.isPlaying ?: false
                 Log.d(TAG, "[PlaybackStateCallback.isPlaying] Called: isPlaying=$playing")
                 return playing
             }

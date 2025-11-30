@@ -31,6 +31,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -61,7 +62,7 @@ fun TrackScreen(
     onDisconnect: () -> Unit = {}  // ADD THIS PARAMETER
 ) {
     var isUserSeeking by remember { mutableStateOf(false) }
-    var seekPosition by remember { mutableStateOf(0f) }
+    var seekPosition by remember { mutableFloatStateOf(0f) }
 
     // Smoothly animate the slider position
     val targetSliderPosition = if (duration > 0) (currentPosition.toFloat() / duration.toFloat()) else 0f
