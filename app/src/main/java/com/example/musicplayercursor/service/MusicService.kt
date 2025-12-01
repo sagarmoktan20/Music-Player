@@ -114,6 +114,7 @@ class MusicService : Service() {
         fun onPlayPauseRequested()
         fun onNextRequested()
         fun onPreviousRequested()
+        fun onNextSongRequested(nextSongId: Long)
     }
 
     override fun onCreate() {
@@ -185,8 +186,15 @@ class MusicService : Service() {
                                     player?.seekTo(0)
                                     player?.play()
                                 } else {
-                                    // Play next song
-                                    playNext()
+                                    // Play next song - use callback if available, otherwise try direct play
+                                    if (viewModelActionCallback != null) {
+                                        val nextSongId = getNextSongId()
+                                        if (nextSongId != null) {
+                                            viewModelActionCallback?.onNextSongRequested(nextSongId)
+                                        }
+                                    } else {
+                                        playNext()
+                                    }
                                 }
                             }
                         }
@@ -259,7 +267,7 @@ class MusicService : Service() {
         if (isBuffering && broadcasterTargetPosition != null) {
             val broadcasterActualPos = broadcasterTargetPosition!!
             val currentPos = player?.currentPosition ?: 0L
-            val catchUpPosition = broadcasterActualPos + 200
+            val catchUpPosition = broadcasterActualPos + 100
             val drift = catchUpPosition - currentPos
             
             if (drift > 300) {
@@ -288,7 +296,7 @@ class MusicService : Service() {
                 val p = player ?: return@launch
                 
                 val broadcasterActualPos = broadcasterTargetPosition ?: p.currentPosition.coerceAtLeast(0L)
-                val catchUpPosition = broadcasterActualPos + 200
+                val catchUpPosition = broadcasterActualPos
                 
                 p.stop()
                 p.clearMediaItems()
@@ -298,8 +306,8 @@ class MusicService : Service() {
                     .setUri(streamUrl)
                     .setLiveConfiguration(
                         androidx.media3.common.MediaItem.LiveConfiguration.Builder()
-                            .setMaxPlaybackSpeed(1.0f)
-                            .setMinPlaybackSpeed(1.0f)
+                            .setMaxPlaybackSpeed(1.05f)
+                            .setMinPlaybackSpeed(0.95f)
                             .build()
                     )
                     .build()
@@ -307,7 +315,7 @@ class MusicService : Service() {
                 p.setMediaItem(newMediaItem)
                 p.prepare()
                 
-                delay(200)
+                // Seek exactly to broadcaster-reported position (no artificial lead)
                 p.seekTo(catchUpPosition.coerceAtLeast(0L))
                 p.playWhenReady = true
                 p.play()
@@ -318,6 +326,23 @@ class MusicService : Service() {
                 isBuffering = false
             }
         }
+    }
+
+    /**
+     * Public wrapper to force re-connection of the receiver stream to the current `receiverStreamUrl`.
+     * Used when broadcaster changes track to ensure ExoPlayer requests the new resource with proper Range.
+     */
+    fun reconnectAudioStream() {
+        reconnectReceiverStream()
+    }
+
+    /**
+     * Adjust receiver playback speed slightly to correct small lead/lag without seeking.
+     */
+    fun setReceiverPlaybackSpeed(speed: Float) {
+        val clamped = speed.coerceIn(0.95f, 1.05f)
+        player?.setPlaybackParameters(androidx.media3.common.PlaybackParameters(clamped))
+        updatePlaybackState()
     }
     
     private fun updatePlaybackState() {
@@ -537,8 +562,8 @@ class MusicService : Service() {
                     .setUri(streamUrl)
                     .setLiveConfiguration(
                         androidx.media3.common.MediaItem.LiveConfiguration.Builder()
-                            .setMaxPlaybackSpeed(1.0f)
-                            .setMinPlaybackSpeed(1.0f)
+                            .setMaxPlaybackSpeed(1.05f)
+                            .setMinPlaybackSpeed(0.95f)
                             .build()
                     )
                     .build()
@@ -893,8 +918,15 @@ class MusicService : Service() {
         
         val nextId = currentQueueSongIds.getOrNull(nextIndex)
         if (nextId != null) {
-            // Would need song lookup - this is handled by ViewModel
-            Log.d(TAG, "[playNext] Next song ID: $nextId")
+            // Try to use callback first, otherwise log
+            if (viewModelActionCallback != null) {
+                Log.d(TAG, "[playNext] Requesting ViewModel to play next song ID: $nextId")
+                // We need to add a method to the callback interface for this
+                // For now, we'll use onNextRequested which should trigger next song in ViewModel
+                viewModelActionCallback?.onNextRequested()
+            } else {
+                Log.w(TAG, "[playNext] Next song ID: $nextId but no callback available to play it")
+            }
         }
     }
     
@@ -1228,5 +1260,22 @@ class MusicService : Service() {
         
       //  stateCallback = null
         viewModelActionCallback = null
+    }
+
+    /**
+     * Get next song ID from queue
+     */
+    private fun getNextSongId(): Long? {
+        if (currentQueueSongIds.isEmpty() || currentIndex < 0) {
+            return null
+        }
+        
+        val nextIndex = if (currentIndex < currentQueueSongIds.size - 1) {
+            currentIndex + 1
+        } else {
+            0 // Loop back to first
+        }
+        
+        return currentQueueSongIds.getOrNull(nextIndex)
     }
 }

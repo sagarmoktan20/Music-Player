@@ -50,6 +50,8 @@ class ConnectViewModel : ViewModel() {
     private var lastSongId: Long? = null
     private var lastPosition: Long = 0L
     private var lastSeekTime: Long = 0L
+    private var latencyEmaMs: Long? = null
+    private val latencyAlpha = 0.1f
     private val json = Json {
         ignoreUnknownKeys = true
         isLenient = true
@@ -176,7 +178,7 @@ class ConnectViewModel : ViewModel() {
         
         viewModelScope.launch {
             try {
-                // Build URL for streaming
+                // Build URL for per-song streaming (supports HTTP Range for fast joins/seeks)
                 val streamUrl = "http://$ip:8080/song?token=$token"
                 Log.d(TAG, "[connectToBroadcast] Stream URL built: $streamUrl")
                 
@@ -232,7 +234,6 @@ class ConnectViewModel : ViewModel() {
         webSocketSession = null
         lastSongId = null
         lastPosition = 0L
-        clockOffset = null
         Log.d(TAG, "[startWebSocketSync] Previous WebSocket job cancelled, state reset")
         
         webSocketJob = viewModelScope.launch {
@@ -257,36 +258,7 @@ class ConnectViewModel : ViewModel() {
                     reconnectAttempts = 0
                     reconnectDelay = INITIAL_RECONNECT_DELAY_MS
                     
-                    // Send initial clock sync message
-                    val clientTime = System.currentTimeMillis()
-                    val clockSyncMessage = """{"clientTime": $clientTime}"""
-                    Log.d(TAG, "[startWebSocketSync] Sending clock sync message: clientTime=$clientTime")
-                    webSocketSession?.send(Frame.Text(clockSyncMessage))
-                    Log.d(TAG, "[startWebSocketSync] Clock sync message sent successfully")
                     
-                    // Receive clock sync response
-                    try {
-                        Log.d(TAG, "[startWebSocketSync] Waiting for clock sync response...")
-                        val clockSyncFrame = webSocketSession?.incoming?.receive() as? Frame.Text
-                        if (clockSyncFrame != null) {
-                            val responseText = clockSyncFrame.readText()
-                            Log.d(TAG, "[startWebSocketSync] Received clock sync response: $responseText")
-                            // Parse server time from response: {"serverTime": 1234567890}
-                            val serverTimeMatch = Regex(""""serverTime"\s*:\s*(\d+)""").find(responseText)
-                            if (serverTimeMatch != null) {
-                                val serverTime = serverTimeMatch.groupValues[1].toLong()
-                                clockOffset = serverTime - clientTime
-                                Log.w(TAG, "[startWebSocketSync] CLOCK OFFSET CALCULATED: $clockOffset ms (serverTime=$serverTime, clientTime=$clientTime)")
-                            } else {
-                                Log.w(TAG, "⚠️ [startWebSocketSync] Could not parse serverTime from response: $responseText")
-                            }
-                        } else {
-                            Log.w(TAG, "⚠️ [startWebSocketSync] Received null or non-text frame for clock sync")
-                        }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "!!! [startWebSocketSync] Error receiving clock sync response: ${e.message}", e)
-                        Log.e(TAG, "!!! [startWebSocketSync] Error details: ${e.javaClass.simpleName}")
-                    }
                     
                     // Listen for incoming messages
                     Log.d(TAG, "[startWebSocketSync] Starting message receive loop...")
@@ -387,41 +359,14 @@ class ConnectViewModel : ViewModel() {
     /**
      * Sync MusicService state with broadcaster state
      */
-    private var clockOffset: Long? = null // server time - local time
-
     private suspend fun syncWithPlayer(songInfo: BroadcastSongInfo) {
         Log.d(TAG, ">>> [syncWithPlayer] Entry: songId=${songInfo.songId}, position=${songInfo.positionMs}ms, isPlaying=${songInfo.isPlaying}, serverTime=${songInfo.serverTimestamp}")
-        
-        // Step 1: Calculate clock offset (only once)
-        if (clockOffset == null) {
-            clockOffset = songInfo.serverTimestamp - System.currentTimeMillis()
-            Log.w(TAG, "[syncWithPlayer] CLOCK OFFSET CALCULATED: $clockOffset ms (serverTime=${songInfo.serverTimestamp}, localTime=${System.currentTimeMillis()})")
-        } else {
-            Log.d(TAG, "[syncWithPlayer] Using existing clock offset: $clockOffset ms")
-        }
 
-        // Step 2: Detect song change
+        // Step 2: Track song change → proactively reconnect per-song stream
         if (lastSongId != null && lastSongId != songInfo.songId) {
-            Log.w(TAG, "[syncWithPlayer] SONG CHANGED! Old: $lastSongId → New: ${songInfo.songId}")
-            
-            // Reconnect stream for new song
-            val serverIP = _connectState.value.serverIP
-            val token = _connectState.value.token
-            if (serverIP != null && token != null && musicService != null) {
-                val newStreamUrl = "http://$serverIP:8080/song?token=$token"
-                Log.d(TAG, "[syncWithPlayer] Reconnecting stream for new song: $newStreamUrl")
-                musicService?.disconnectFromBroadcast()
-                delay(100) // Small delay to ensure cleanup
-                musicService?.connectToBroadcast(newStreamUrl)
-                delay(300) // Wait for connection to establish
-            } else {
-                Log.w(TAG, "[syncWithPlayer] No server IP or token available, just seeking to 0")
-                musicService?.seekToReceiver(0L)
-            }
-            
-            lastSeekTime = System.currentTimeMillis() // Reset debounce timer on song change
-            lastPosition = 0L // Reset position tracking
-            Log.d(TAG, "[syncWithPlayer] Song change handled: stream reconnected, timers reset")
+            Log.w(TAG, "[syncWithPlayer] Song changed: $lastSongId -> ${songInfo.songId} → reconnecting receiver stream")
+            musicService?.reconnectAudioStream()
+            lastPosition = 0L
         }
         lastSongId = songInfo.songId
 
@@ -430,51 +375,53 @@ class ConnectViewModel : ViewModel() {
         Log.d(TAG, "[syncWithPlayer] Current receiver position: ${currentPos}ms")
 
         // Step 4: Calculate predicted position
-        val timeSinceServerReport = System.currentTimeMillis() - songInfo.serverTimestamp
-        Log.d(TAG, "[syncWithPlayer] Time since server report: ${timeSinceServerReport}ms")
-        
-        val predictedPosition = if (songInfo.isPlaying && timeSinceServerReport > 0) {
-            val predicted = (songInfo.positionMs + timeSinceServerReport).coerceIn(0L, songInfo.durationMs)
-            Log.d(TAG, "[syncWithPlayer] Predicted position (playing): ${predicted}ms (serverPos=${songInfo.positionMs}ms + elapsed=${timeSinceServerReport}ms)")
-            predicted
-        } else {
-            Log.d(TAG, "[syncWithPlayer] Predicted position (paused): ${songInfo.positionMs}ms (no advancement)")
-            songInfo.positionMs // If paused, position stays same
+        // Step 5: Estimate one-way latency via arrival timestamp EMA
+        val arrivalLatency = System.currentTimeMillis() - songInfo.serverTimestamp
+        latencyEmaMs = if (latencyEmaMs == null) arrivalLatency else {
+            val ema = (latencyEmaMs!!.toFloat() * (1f - latencyAlpha) + arrivalLatency.toFloat() * latencyAlpha).toLong()
+            ema
         }
+        val estLatency = latencyEmaMs ?: arrivalLatency
+        Log.d(TAG, "[syncWithPlayer] Latency EMA: ${latencyEmaMs}ms (arrival=${arrivalLatency}ms)")
 
-        // Step 5: Calculate corrected position with clock offset
-        val correctedServerPosition = songInfo.positionMs + (System.currentTimeMillis() + (clockOffset ?: 0L) - songInfo.serverTimestamp)
-        Log.d(TAG, "[syncWithPlayer] Corrected server position: ${correctedServerPosition}ms")
-
-        // Step 6: Choose target position
-        val targetPosition = predictedPosition.coerceIn(0L, songInfo.durationMs)
-        Log.d(TAG, "[syncWithPlayer] Target position: ${targetPosition}ms (using predicted)")
+        // Step 6: Choose target based on broadcaster position advanced by estimated latency
+        val targetPosition = (songInfo.positionMs + (if (songInfo.isPlaying) estLatency else 0L)).coerceIn(0L, songInfo.durationMs)
+        Log.d(TAG, "[syncWithPlayer] Target position: ${targetPosition}ms (serverPos=${songInfo.positionMs} + estLatency=${estLatency})")
 
         // Store the broadcaster's ACTUAL reported position (not predicted) for catch-up after buffering
         musicService?.updateBroadcasterTargetPosition(songInfo.positionMs)
         Log.d(TAG, "[syncWithPlayer] Stored broadcaster actual position: ${songInfo.positionMs}ms (for buffering catch-up)")
 
         // Step 7: Check drift and seek if needed
-        val drift = kotlin.math.abs(targetPosition - currentPos)
+        val driftSigned = (targetPosition - currentPos)
+        val drift = kotlin.math.abs(driftSigned)
         val timeSinceLastSeek = System.currentTimeMillis() - lastSeekTime
         Log.d(TAG, "[syncWithPlayer] Drift calculation: drift=${drift}ms, timeSinceLastSeek=${timeSinceLastSeek}ms, threshold=${DRIFT_THRESHOLD_MS}ms, minInterval=${MIN_SEEK_INTERVAL_MS}ms")
 
-        val significantDrift = drift > DRIFT_THRESHOLD_MS
         val canSeek = timeSinceLastSeek >= MIN_SEEK_INTERVAL_MS
-        val largeEnoughDrift = drift > 400L // Additional threshold to prevent micro-seeks
-        Log.d(TAG, "[syncWithPlayer] Seek conditions: significantDrift=$significantDrift, canSeek=$canSeek, largeEnoughDrift=$largeEnoughDrift")
+        val behindThreshold = 200L
+        val aheadThreshold = 125L
+        Log.d(TAG, "[syncWithPlayer] Seek conditions: canSeek=$canSeek, driftSigned=$driftSigned, behindThreshold=$behindThreshold, aheadThreshold=$aheadThreshold")
 
-        if (significantDrift && canSeek && largeEnoughDrift) {
-            Log.w(TAG, "[syncWithPlayer] LARGE DRIFT DETECTED: $drift ms → SEEKING TO $targetPosition ms (current: ${currentPos}ms)")
-            musicService?.seekToReceiver(targetPosition)
-            lastSeekTime = System.currentTimeMillis()
-            lastPosition = targetPosition
-            Log.d(TAG, "[syncWithPlayer] Seek completed: new position=$targetPosition, lastSeekTime updated")
-        } else {
-            if (drift > DRIFT_THRESHOLD_MS) {
-                Log.d(TAG, "[syncWithPlayer] Drift detected ($drift ms) but not seeking: canSeek=$canSeek, largeEnough=$largeEnoughDrift")
-            } else {
-                Log.d(TAG, "[syncWithPlayer] Sync good: drift=$drift ms (within ±${DRIFT_THRESHOLD_MS}ms tolerance)")
+        when {
+            // Only seek when receiver is significantly behind
+            driftSigned > behindThreshold && canSeek -> {
+                Log.w(TAG, "[syncWithPlayer] Receiver BEHIND by ${driftSigned}ms → seeking to $targetPosition")
+                musicService?.seekToReceiver(targetPosition)
+                lastSeekTime = System.currentTimeMillis()
+                lastPosition = targetPosition
+                musicService?.setReceiverPlaybackSpeed(1.0f)
+            }
+            // If receiver is ahead, slow down slightly to let broadcaster catch up
+            driftSigned < -aheadThreshold -> {
+                val speed = 0.97f
+                Log.w(TAG, "[syncWithPlayer] Receiver AHEAD by ${-driftSigned}ms → slowing to $speed")
+                musicService?.setReceiverPlaybackSpeed(speed)
+            }
+            else -> {
+                // Within tolerance: normal speed
+                musicService?.setReceiverPlaybackSpeed(1.0f)
+                Log.d(TAG, "[syncWithPlayer] Within tolerance: drift=${driftSigned}ms → keep speed 1.0, no seek")
             }
         }
 
@@ -498,7 +445,7 @@ class ConnectViewModel : ViewModel() {
 
         // Update tracking variables
         lastPosition = if (songInfo.isPlaying) {
-            (songInfo.positionMs + timeSinceServerReport).coerceIn(0L, songInfo.durationMs)
+            (songInfo.positionMs + (latencyEmaMs ?: (System.currentTimeMillis() - songInfo.serverTimestamp))).coerceIn(0L, songInfo.durationMs)
         } else {
             songInfo.positionMs
         }
@@ -552,8 +499,7 @@ class ConnectViewModel : ViewModel() {
         
         lastSongId = null
         lastPosition = 0L
-        clockOffset = null
-        Log.d(TAG, "[disconnectFromBroadcast] State cleared: lastSongId=null, lastPosition=0, clockOffset=null")
+        Log.d(TAG, "[disconnectFromBroadcast] State cleared: lastSongId=null, lastPosition=0")
         Log.i(TAG, "<<< [disconnectFromBroadcast] Success: Disconnected from broadcast")
     }
     

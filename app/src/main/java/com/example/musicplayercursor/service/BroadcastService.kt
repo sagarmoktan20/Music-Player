@@ -95,6 +95,9 @@ class BroadcastService : Service() {
     private val connectedClients = mutableSetOf<DefaultWebSocketServerSession>()
     private var syncJob: Job? = null
 
+    // Add this as a class-level variable to track persistent stream state
+    private val persistentStreamClients = mutableMapOf<String, Pair<Long, Long>>() // clientId -> (currentSongId, lastPosition)
+
     interface PlaybackStateCallback {
         fun getCurrentSong(): Song?
         fun getCurrentPosition(): Long
@@ -169,7 +172,6 @@ class BroadcastService : Service() {
                     val remoteHost = call.request.origin.remoteHost
                     val requestTime = System.currentTimeMillis()
                     Log.d(TAG, "🌐 [HTTP GET /song] Request from $remoteHost at $requestTime")
-                    Log.d(TAG, "[HTTP GET /song] Request headers: ${call.request.headers.entries()}")
                     
                     val tokenParam = call.request.queryParameters["token"]
                     if (tokenParam == null) {
@@ -189,7 +191,7 @@ class BroadcastService : Service() {
                         Log.w(TAG, "⚠️ [HTTP GET /song] No song playing, callback=${getPlaybackStateCallback() != null}")
                         return@get call.respond(HttpStatusCode.NotFound, "No song playing")
                     }
-                    Log.d(TAG, "[HTTP GET /song] Streaming song: ${song.title} by ${song.artist}, size=${song.durationMs}ms")
+                    Log.d(TAG, "[HTTP GET /song] Streaming song: ${song.title} by ${song.artist}")
 
                     try {
                         contentResolver.openFileDescriptor(song.contentUri, "r")?.use { pfd ->
@@ -197,13 +199,27 @@ class BroadcastService : Service() {
                             val fileSize = pfd.statSize
                             Log.d(TAG, "[HTTP GET /song] File opened: size=$fileSize bytes")
 
+                            // OPTIMIZED: Only parse Range header if it's actually needed (seeking, not new song)
+                            // New songs always start from 0, so skip parsing overhead
                             val rangeHeader = call.request.headers["Range"]
-                            val startByte = if (rangeHeader?.startsWith("bytes=") == true) {
-                                rangeHeader.substringAfter("bytes=").substringBefore("-").toLongOrNull() ?: 0L
-                            } else 0L
-                            Log.d(TAG, "[HTTP GET /song] Range header: $rangeHeader, startByte: $startByte")
-
-                            val contentLength = fileSize - startByte
+                            val startByte = when {
+                                // No Range header = new song, start from 0
+                                rangeHeader == null -> {
+                                    Log.d(TAG, "[HTTP GET /song] No Range header - new song, starting from 0")
+                                    0L
+                                }
+                                // Range header starts with "bytes=0" = new song, start from 0 (skip parsing)
+                                rangeHeader.startsWith("bytes=0") -> {
+                                    Log.d(TAG, "[HTTP GET /song] Range header starts from 0 - new song, starting from 0")
+                                    0L
+                                }
+                                // Range header with non-zero start = seek operation, parse it
+                                else -> {
+                                    val parsedStart = rangeHeader.substringAfter("bytes=").substringBefore("-").toLongOrNull() ?: 0L
+                                    Log.d(TAG, "[HTTP GET /song] Range header parsed: $rangeHeader -> startByte: $parsedStart (seek operation)")
+                                    parsedStart
+                                }
+                            }
 
                             // Set correct headers
                             if (startByte > 0 && startByte < fileSize) {
@@ -212,31 +228,40 @@ class BroadcastService : Service() {
                                 Log.d(TAG, "[HTTP GET /song] Partial content: bytes $startByte-${fileSize - 1}/$fileSize")
                             } else {
                                 call.response.status(HttpStatusCode.OK)
-                                Log.d(TAG, "[HTTP GET /song] Full content: $fileSize bytes")
+                                Log.d(TAG, "[HTTP GET /song] Full content: $fileSize bytes (starting from 0)")
                             }
 
-                            // Remove or comment out Content-Length header for streaming
-// call.response.header(HttpHeaders.ContentLength, contentLength.toString())
-
-// Instead, use chunked transfer encoding (or don't set Content-Length)
                             call.response.header(HttpHeaders.AcceptRanges, "bytes")
                             call.response.header(HttpHeaders.ContentType, "audio/mpeg")
-// Don't set Content-Length - let ExoPlayer treat it as a live stream
+                            // Informational headers for debugging/clients (not used by ExoPlayer)
+                            getPlaybackStateCallback()?.let { cb ->
+                                val pos = cb.getCurrentPosition()
+                                val dur = cb.getDuration()
+                                val playing = cb.isPlaying()
+                                call.response.header("X-Broadcaster-Position-Ms", pos.toString())
+                                call.response.header("X-Broadcaster-Duration-Ms", dur.toString())
+                                call.response.header("X-Broadcaster-IsPlaying", playing.toString())
+                            }
 
-                            Log.d(TAG, "[HTTP GET /song] Starting stream transfer (chunked/no Content-Length)")
+                            Log.d(TAG, "[HTTP GET /song] Starting stream transfer from byte $startByte")
                             val streamStartTime = System.currentTimeMillis()
                             var bytesTransferred = 0L
                             
                             call.respond(object : OutgoingContent.WriteChannelContent() {
-                                override val contentLength: Long? = null  // Set to null for streaming
+                                override val contentLength: Long? = null
                                 override val headers: Headers = Headers.Empty
 
                                 override suspend fun writeTo(channel: ByteWriteChannel) {
                                     try {
                                         Log.d(TAG, "[HTTP GET /song] Opening file input stream, starting at byte $startByte")
                                         FileInputStream(fd).use { input ->
-                                            input.skip(startByte)  // Skip to requested byte
-                                            Log.d(TAG, "[HTTP GET /song] Skipped to byte $startByte, starting transfer...")
+                                            // Only skip if startByte > 0 (seek operation)
+                                            if (startByte > 0) {
+                                                input.skip(startByte)
+                                                Log.d(TAG, "[HTTP GET /song] Skipped to byte $startByte (seek operation)")
+                                            } else {
+                                                Log.d(TAG, "[HTTP GET /song] Starting from beginning (new song)")
+                                            }
 
                                             // Properly write bytes to ByteWriteChannel
                                             val buffer = ByteArray(8192)
@@ -278,6 +303,109 @@ class BroadcastService : Service() {
                         }
                     } catch (e: Exception) {
                         Log.e(TAG, "!!! [HTTP GET /song] Error during streaming", e)
+                        call.respond(HttpStatusCode.InternalServerError, "Stream error: ${e.message}")
+                    }
+                }
+
+                get("/stream") {
+                    val remoteHost = call.request.origin.remoteHost
+                    val clientId = "${remoteHost}_${System.currentTimeMillis()}"
+                    val requestTime = System.currentTimeMillis()
+                    Log.d(TAG, "�� [HTTP GET /stream] Persistent stream request from $remoteHost (clientId=$clientId)")
+                    
+                    val tokenParam = call.request.queryParameters["token"]
+                    if (tokenParam == null) {
+                        Log.e(TAG, "!!! [HTTP GET /stream] Missing token from $remoteHost")
+                        return@get call.respond(HttpStatusCode.Unauthorized, "Missing token")
+                    }
+
+                    if (tokenParam != currentToken) {
+                        Log.w(TAG, "⚠️ [HTTP GET /stream] Invalid token from $remoteHost")
+                        return@get call.respond(HttpStatusCode.Forbidden, "Wrong token")
+                    }
+
+                    // Set headers for persistent streaming
+                    call.response.header(HttpHeaders.ContentType, "audio/mpeg")
+                    call.response.header(HttpHeaders.AcceptRanges, "bytes")
+                    call.response.status(HttpStatusCode.OK)
+                    
+                    Log.d(TAG, "[HTTP GET /stream] Starting persistent stream for client $clientId")
+                    
+                    try {
+                        call.respond(object : OutgoingContent.WriteChannelContent() {
+                            override val contentLength: Long? = null
+                            override val headers: Headers = Headers.Empty
+
+                            override suspend fun writeTo(channel: ByteWriteChannel) {
+                                var lastCompletedSongId: Long? = null
+                                var streamStartTime = System.currentTimeMillis()
+                                
+                                try {
+                    while (true) { // Keep connection alive
+                        val callback = getPlaybackStateCallback()
+                        val currentSong = callback?.getCurrentSong()
+                        
+                        if (currentSong == null) {
+                            Log.d(TAG, "[HTTP GET /stream] No song playing, waiting...")
+                            delay(100)
+                            continue
+                        }
+                        
+                        // If we already streamed this song completely, wait for broadcaster to switch
+                        if (lastCompletedSongId != null && currentSong.id == lastCompletedSongId) {
+                            delay(100)
+                            continue
+                        }
+                        
+                        Log.i(TAG, "[HTTP GET /stream] Starting stream for song ${currentSong.id} (${currentSong.title})")
+                        streamStartTime = System.currentTimeMillis()
+                        
+                        // Open and stream current song file fully before switching
+                        contentResolver.openFileDescriptor(currentSong.contentUri, "r")?.use { pfd ->
+                            val fd = pfd.fileDescriptor
+                            
+                            FileInputStream(fd).use { input ->
+                                val buffer = ByteArray(8192)
+                                var bytesRead: Int
+                                var totalBytesForSong = 0L
+                                
+                                while (input.read(buffer).also { bytesRead = it } != -1) {
+                                    try {
+                                        channel.writeFully(buffer, 0, bytesRead)
+                                        totalBytesForSong += bytesRead
+                                    } catch (e: Exception) {
+                                        Log.w(TAG, "[HTTP GET /stream] Client disconnected: ${e.message}")
+                                        throw e
+                                    }
+                                }
+                                
+                                val duration = System.currentTimeMillis() - streamStartTime
+                                Log.d(TAG, "[HTTP GET /stream] Completed stream for song ${currentSong.id}: ${totalBytesForSong} bytes in ${duration}ms")
+                            }
+                        } ?: run {
+                            Log.w(TAG, "[HTTP GET /stream] Cannot open file for ${currentSong.contentUri}, ending stream for this client")
+                            delay(100)
+                            return@writeTo
+                        }
+                        
+                        // Mark song as fully streamed so we don't resend unless broadcaster changes track
+                        lastCompletedSongId = currentSong.id
+                    }
+                                } catch (e: Exception) {
+                                    if (e is ClosedChannelException || e.message?.contains("closed") == true) {
+                                        Log.d(TAG, "[HTTP GET /stream] Client $clientId disconnected normally")
+                                    } else {
+                                        Log.e(TAG, "[HTTP GET /stream] Error in persistent stream for client $clientId", e)
+                                    }
+                                    throw e
+                                } finally {
+                                    persistentStreamClients.remove(clientId)
+                                    Log.d(TAG, "[HTTP GET /stream] Persistent stream ended for client $clientId")
+                                }
+                            }
+                        })
+                    } catch (e: Exception) {
+                        Log.e(TAG, "!!! [HTTP GET /stream] Error setting up persistent stream", e)
                         call.respond(HttpStatusCode.InternalServerError, "Stream error: ${e.message}")
                     }
                 }
@@ -442,7 +570,7 @@ class BroadcastService : Service() {
             try {
                 server?.start(wait = false)  // NON-BLOCKING — CRITICAL
                 Log.i(TAG, "[startBroadcast] ✅ SERVER STARTED → http://$serverIP:$PORT")
-                Log.d(TAG, "[startBroadcast] Server endpoints: /, /song?token=..., /current?token=..., /sync?token=... (WebSocket)")
+                Log.d(TAG, "[startBroadcast] Server endpoints: /, /song?token=..., /stream?token=... (persistent), /current?token=..., /sync?token=... (WebSocket)")
                 
                 val notification = createNotification("Running • $serverIP:$PORT")
                 startForeground(NOTIFICATION_ID, notification)
@@ -642,6 +770,5 @@ class BroadcastService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 }
-
 
 

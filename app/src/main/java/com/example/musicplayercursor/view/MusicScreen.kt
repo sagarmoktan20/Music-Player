@@ -347,7 +347,12 @@ fun MusicScreen(
 					onPrevious = { if (!isReceiverMode) viewModel.playPreviousSong(context) },
 					onNext = { if (!isReceiverMode) viewModel.playNextSong(context) },
 					onSeek = { position -> if (!isReceiverMode) viewModel.seekTo(position) },
-					onToggleFavourite = { if (!isReceiverMode) viewModel.toggleFavourite(context, uiState.current!!) },
+					onToggleFavourite = { 
+						if (!isReceiverMode && uiState.current != null) {
+							// Use the current song from the latest state
+							viewModel.toggleFavourite(context, uiState.current!!)
+						}
+					},
 					onToggleLoop = { if (!isReceiverMode) viewModel.toggleLoop() },
 					isReceiverMode = isReceiverMode,
 					isConnectedToBroadcast = connectState.isConnected,

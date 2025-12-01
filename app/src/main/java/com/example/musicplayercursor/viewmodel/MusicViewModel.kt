@@ -79,6 +79,7 @@ class MusicViewModel: ViewModel() {
         fun onPlayPauseRequested()
         fun onNextRequested()
         fun onPreviousRequested()
+        fun onNextSongRequested(nextSongId: Long)
     }
 
     fun setViewModelActionCallback(callback: ViewModelActionCallback?) {
@@ -110,6 +111,20 @@ class MusicViewModel: ViewModel() {
                     playPreviousSong(ctx)
                 }
             }
+
+            override fun onNextSongRequested(nextSongId: Long) {
+                Log.d(TAG, "[ViewModelActionCallback] Next song requested with ID: $nextSongId")
+                applicationContext?.let { ctx ->
+                    val nextSong = _uiState.value.songs.find { it.id == nextSongId }
+                    if (nextSong != null) {
+                        play(ctx, nextSong)
+                    } else {
+                        Log.w(TAG, "[ViewModelActionCallback] Next song with ID $nextSongId not found")
+                        // Fallback to playNextSong which will find the next song
+                        playNextSong(ctx)
+                    }
+                }
+            }
         })
         
         // Observe MusicService playback state
@@ -118,12 +133,39 @@ class MusicViewModel: ViewModel() {
             serviceStateObserverJob = service.playbackState
                 .onEach { playbackState ->
                     // Sync MusicService state to UI state
-                    _uiState.value = _uiState.value.copy(
-                        current = playbackState.currentSong,
+                    // IMPORTANT: Preserve UI-specific properties (like isFavourite, isLooping) from current state
+                    val currentState = _uiState.value
+                    val serviceSong = playbackState.currentSong
+                    
+                    // If we have a current song and the service song matches, preserve UI properties
+                    val updatedCurrentSong = if (serviceSong != null && currentState.current?.id == serviceSong.id) {
+                        // Preserve favourite status and other UI properties from current state
+                        currentState.current!!.copy(
+                            // Update any properties that might have changed, but preserve isFavourite
+                            title = serviceSong.title,
+                            artist = serviceSong.artist,
+                            durationMs = serviceSong.durationMs,
+                            contentUri = serviceSong.contentUri,
+                            // Preserve UI-specific properties
+                            isFavourite = currentState.current!!.isFavourite,
+                            playCount = currentState.current!!.playCount,
+                            lastPlayed = currentState.current!!.lastPlayed
+                        )
+                    } else {
+                        // New song - find it in songs list to get UI properties, or use service song
+                        serviceSong?.let { song ->
+                            currentState.songs.find { it.id == song.id } ?: song
+                        }
+                    }
+                    
+                    // Sync isLooping from service (service is source of truth for playback state)
+                    // Since we update the service when user toggles, this will reflect the correct state
+                    _uiState.value = currentState.copy(
+                        current = updatedCurrentSong,
                         isPlaying = playbackState.isPlaying,
                         currentPosition = playbackState.currentPosition,
                         duration = playbackState.duration,
-                        isLooping = playbackState.isLooping
+                        isLooping = playbackState.isLooping  // Sync from service
                     )
                 }
                 .launchIn(viewModelScope)
@@ -366,7 +408,16 @@ class MusicViewModel: ViewModel() {
     }
 
     fun toggleLoop() {
-        _uiState.value = _uiState.value.copy(isLooping = !_uiState.value.isLooping)
+        val newLoopingState = !_uiState.value.isLooping
+        Log.d(TAG, "[toggleLoop] Toggling loop: ${_uiState.value.isLooping} -> $newLoopingState")
+        
+        // Update UI state
+        _uiState.value = _uiState.value.copy(isLooping = newLoopingState)
+        
+        // Also update MusicService to keep them in sync
+        musicService?.setLooping(newLoopingState)
+        
+        Log.d(TAG, "[toggleLoop] State updated, new looping: ${_uiState.value.isLooping}")
     }
 
     fun toggleFavourite(context: Context, song: Song) {
@@ -374,30 +425,71 @@ class MusicViewModel: ViewModel() {
             favouritesRepository = it
         }
         
+        // Get the CURRENT state
+        val currentState = _uiState.value
+        val currentSong = currentState.current
+        
+        // Determine the current favourite status from the state, not the parameter
+        val currentFavouriteStatus = when {
+            currentSong?.id == song.id -> currentSong.isFavourite
+            else -> {
+                // If current song doesn't match, find it in the songs list
+                currentState.songs.find { it.id == song.id }?.isFavourite ?: song.isFavourite
+            }
+        }
+        
+        val newFavouriteStatus = !currentFavouriteStatus
+        Log.d(TAG, "[toggleFavourite] Toggling favourite for song ${song.id}: $currentFavouriteStatus -> $newFavouriteStatus")
+        
+        // Update the song in the list (preserve play count)
+        val updatedSongs = currentState.songs.map {
+            if (it.id == song.id) it.copy(isFavourite = newFavouriteStatus) else it
+        }
+        
+        // Update current song if it's the one being toggled (preserve play count)
+        // Create a completely new Song object to ensure StateFlow detects the change
+        val updatedCurrent = if (currentSong?.id == song.id) {
+            currentSong.copy(
+                isFavourite = newFavouriteStatus,
+                // Explicitly copy all fields to ensure new object reference
+                id = currentSong.id,
+                title = currentSong.title,
+                artist = currentSong.artist,
+                durationMs = currentSong.durationMs,
+                contentUri = currentSong.contentUri,
+                playCount = currentSong.playCount,
+                dateAdded = currentSong.dateAdded,
+                lastPlayed = currentSong.lastPlayed
+            )
+        } else {
+            currentSong
+        }
+        
+        Log.d(TAG, "[toggleFavourite] Updated current song favourite status: ${updatedCurrent?.isFavourite}")
+        
+        // Update UI state immediately for instant feedback
+        // Create a new state object to ensure StateFlow detects the change
+        _uiState.value = MusicUiState(
+            songs = updatedSongs,
+            current = updatedCurrent,
+            isPlaying = currentState.isPlaying,
+            currentPosition = currentState.currentPosition,
+            duration = currentState.duration,
+            selectedSongs = currentState.selectedSongs,
+            isSelectionMode = currentState.isSelectionMode,
+            playlists = currentState.playlists,
+            isLooping = currentState.isLooping
+        )
+        
+        Log.d(TAG, "[toggleFavourite] State updated, new current favourite: ${_uiState.value.current?.isFavourite}")
+        
+        // Then persist to repository in background
         viewModelScope.launch {
-            val newFavouriteStatus = !song.isFavourite
             if (newFavouriteStatus) {
                 repo.addFavourite(song.id)
             } else {
                 repo.removeFavourite(song.id)
             }
-            
-            // Update the song in the list (preserve play count)
-            val updatedSongs = _uiState.value.songs.map {
-                if (it.id == song.id) it.copy(isFavourite = newFavouriteStatus) else it
-            }
-            
-            // Update current song if it's the one being toggled (preserve play count)
-            val updatedCurrent = if (_uiState.value.current?.id == song.id) {
-                _uiState.value.current?.copy(isFavourite = newFavouriteStatus)
-            } else {
-                _uiState.value.current
-            }
-            
-            _uiState.value = _uiState.value.copy(
-                songs = updatedSongs,
-                current = updatedCurrent
-            )
         }
     }
 
