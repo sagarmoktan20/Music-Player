@@ -42,7 +42,7 @@ data class ConnectState(
 class ConnectViewModel : ViewModel() {
     private val _connectState = MutableStateFlow(ConnectState())
     val connectState: StateFlow<ConnectState> = _connectState.asStateFlow()
-    
+
     private var webSocketJob: Job? = null
     private var webSocketSession: WebSocketSession? = null
     private var httpClient: HttpClient? = null
@@ -51,12 +51,13 @@ class ConnectViewModel : ViewModel() {
     private var lastPosition: Long = 0L
     private var lastSeekTime: Long = 0L
     private var latencyEmaMs: Long? = null
+    private var minLatencyMs: Long? = null // To track base clock offset
     private val latencyAlpha = 0.1f
     private val json = Json {
         ignoreUnknownKeys = true
         isLenient = true
     }
-    
+
     fun setMusicService(service: com.example.musicplayercursor.service.MusicService?) {
         musicService = service
         Log.d(TAG, "[setMusicService] Service set: ${service != null}")
@@ -82,7 +83,7 @@ class ConnectViewModel : ViewModel() {
         private const val INITIAL_RECONNECT_DELAY_MS = 1000L
         private const val MAX_RECONNECT_DELAY_MS = 10000L
     }
-    
+
     /**
      * Parse deep link: musicplayer://broadcast?ip=192.168.43.1&token=k9m3p2x8
      */
@@ -95,12 +96,12 @@ class ConnectViewModel : ViewModel() {
                 val ip = uri.getQueryParameter("ip")
                 val token = uri.getQueryParameter("token")
                 Log.d(TAG, "[parseDeepLink] Extracted parameters: ip=$ip, token=$token")
-                
+
                 if (ip == null || token == null) {
                     Log.e(TAG, "!!! [parseDeepLink] Missing required parameters: ip=$ip, token=$token")
                     return Pair(null, null)
                 }
-                
+
                 val result = Pair(ip, token)
                 Log.i(TAG, "<<< [parseDeepLink] Success: ip=$ip, token=$token")
                 result
@@ -115,7 +116,7 @@ class ConnectViewModel : ViewModel() {
             Pair(null, null)
         }
     }
-    
+
     /**
      * Check if current network is in hotspot range
      */
@@ -123,29 +124,29 @@ class ConnectViewModel : ViewModel() {
         Log.d(TAG, ">>> [isOnHotspotNetwork] Entry")
         val localIP = NetworkUtils.getLocalIPAddress()
         Log.d(TAG, "[isOnHotspotNetwork] Local IP detected: $localIP")
-        
+
         if (localIP == null) {
             Log.w(TAG, "[isOnHotspotNetwork] No local IP found - not on hotspot network")
             Log.d(TAG, "<<< [isOnHotspotNetwork] Result: false (no IP)")
             return false
         }
-        
+
         val isHotspot = localIP.startsWith("192.168.") ||
-            localIP.startsWith("172.16.") || localIP.startsWith("172.17.") ||
-            localIP.startsWith("172.18.") || localIP.startsWith("172.19.") ||
-            localIP.startsWith("172.20.") || localIP.startsWith("172.21.") ||
-            localIP.startsWith("172.22.") || localIP.startsWith("172.23.") ||
-            localIP.startsWith("172.24.") || localIP.startsWith("172.25.") ||
-            localIP.startsWith("172.26.") || localIP.startsWith("172.27.") ||
-            localIP.startsWith("172.28.") || localIP.startsWith("172.29.") ||
-            localIP.startsWith("172.30.") || localIP.startsWith("172.31.") ||
-            localIP.startsWith("10.")
-        
+                localIP.startsWith("172.16.") || localIP.startsWith("172.17.") ||
+                localIP.startsWith("172.18.") || localIP.startsWith("172.19.") ||
+                localIP.startsWith("172.20.") || localIP.startsWith("172.21.") ||
+                localIP.startsWith("172.22.") || localIP.startsWith("172.23.") ||
+                localIP.startsWith("172.24.") || localIP.startsWith("172.25.") ||
+                localIP.startsWith("172.26.") || localIP.startsWith("172.27.") ||
+                localIP.startsWith("172.28.") || localIP.startsWith("172.29.") ||
+                localIP.startsWith("172.30.") || localIP.startsWith("172.31.") ||
+                localIP.startsWith("10.")
+
         Log.d(TAG, "[isOnHotspotNetwork] IP range check: $localIP matches hotspot pattern=$isHotspot")
         Log.d(TAG, "<<< [isOnHotspotNetwork] Success: result=$isHotspot (IP: $localIP)")
         return isHotspot
     }
-    
+
     /**
      * Connect to broadcast server
      */
@@ -156,7 +157,7 @@ class ConnectViewModel : ViewModel() {
             Log.w(TAG, "⚠️ [connectToBroadcast] Already connecting or connected: isConnecting=${currentState.isConnecting}, isConnected=${currentState.isConnected}")
             return
         }
-        
+
         if (musicService == null) {
             Log.e(TAG, "!!! [connectToBroadcast] MusicService is null!")
             _connectState.value = _connectState.value.copy(
@@ -164,7 +165,7 @@ class ConnectViewModel : ViewModel() {
             )
             return
         }
-        
+
         Log.d(TAG, "[connectToBroadcast] Starting connection to: http://$ip:8080")
         val oldState = _connectState.value
         _connectState.value = _connectState.value.copy(
@@ -175,13 +176,13 @@ class ConnectViewModel : ViewModel() {
         )
         Log.d(TAG, "[ConnectState] Changed: isConnecting=${oldState.isConnecting} -> ${_connectState.value.isConnecting}")
         Log.d(TAG, "[ConnectState] serverIP=${_connectState.value.serverIP}, token=${_connectState.value.token}")
-        
+
         viewModelScope.launch {
             try {
                 // Build URL for per-song streaming (supports HTTP Range for fast joins/seeks)
                 val streamUrl = "http://$ip:8080/song?token=$token"
                 Log.d(TAG, "[connectToBroadcast] Stream URL built: $streamUrl")
-                
+
                 // Connect via MusicService
                 Log.d(TAG, "[connectToBroadcast] Connecting via MusicService...")
                 musicService?.connectToBroadcast(streamUrl)
@@ -199,13 +200,13 @@ class ConnectViewModel : ViewModel() {
                 // NOW start WebSocket sync
                 Log.d(TAG, "[connectToBroadcast] Starting WebSocket sync...")
                 startWebSocketSync(ip, token)
-                
+
                 Log.i(TAG, "<<< [connectToBroadcast] Success: Connected to broadcast successfully")
             } catch (e: Exception) {
                 Log.e(TAG, "!!! [connectToBroadcast] Error connecting to broadcast: ${e.message}", e)
                 Log.e(TAG, "!!! [connectToBroadcast] Error details: ${e.javaClass.simpleName}")
                 e.printStackTrace()
-                
+
                 val oldErrorState = _connectState.value
                 _connectState.value = _connectState.value.copy(
                     isConnecting = false,
@@ -216,7 +217,7 @@ class ConnectViewModel : ViewModel() {
             }
         }
     }
-    
+
     /**
      * Start WebSocket sync for real-time state synchronization
      */
@@ -235,11 +236,11 @@ class ConnectViewModel : ViewModel() {
         lastSongId = null
         lastPosition = 0L
         Log.d(TAG, "[startWebSocketSync] Previous WebSocket job cancelled, state reset")
-        
+
         webSocketJob = viewModelScope.launch {
             var reconnectAttempts = 0
             var reconnectDelay = INITIAL_RECONNECT_DELAY_MS
-            
+
             while (isActive && _connectState.value.isConnected) {
                 try {
                     val client = httpClient
@@ -247,44 +248,44 @@ class ConnectViewModel : ViewModel() {
                         Log.e(TAG, "!!! [startWebSocketSync] HTTP client is null, breaking loop")
                         return@launch
                     }
-                    
+
                     val wsUrl = "ws://$ip:8080/sync?token=$token"
                     Log.d(TAG, "🔌 [startWebSocketSync] Connecting to $wsUrl (attempt ${reconnectAttempts + 1})")
-                    
+
                     webSocketSession = client.webSocketSession(wsUrl)
                     Log.i(TAG, "✅ [startWebSocketSync] WebSocket connected successfully")
-                    
+
                     // Reset reconnect state on successful connection
                     reconnectAttempts = 0
                     reconnectDelay = INITIAL_RECONNECT_DELAY_MS
-                    
-                    
-                    
+
+
+
                     // Listen for incoming messages
                     Log.d(TAG, "[startWebSocketSync] Starting message receive loop...")
                     var messageCount = 0L
                     for (frame in webSocketSession!!.incoming) {
                         Log.d(TAG, "[startWebSocketSync] Received frame: ${frame::class.simpleName}, isActive=$isActive, isConnected=${_connectState.value.isConnected}")
-                        
+
                         if (!isActive || !_connectState.value.isConnected) {
                             Log.w(TAG, "[startWebSocketSync] Connection state changed, breaking message loop: isActive=$isActive, isConnected=${_connectState.value.isConnected}")
                             break
                         }
-                        
+
                         if (frame is Frame.Text) {
                             try {
                                 val message = frame.readText()
                                 messageCount++
                                 Log.d(TAG, "[startWebSocketSync] Received message #$messageCount, length: ${message.length} bytes")
-                                
+
                                 // Parse BroadcastSongInfo JSON
                                 val songInfo: BroadcastSongInfo = json.decodeFromString(BroadcastSongInfo.serializer(), message)
                                 Log.d(TAG, "[startWebSocketSync] Parsed message: songId=${songInfo.songId}, position=${songInfo.positionMs}ms, isPlaying=${songInfo.isPlaying}, serverTime=${songInfo.serverTimestamp}")
-                                
+
                                 if (messageCount % 200 == 0L) {
                                     Log.i(TAG, "[startWebSocketSync] Received $messageCount messages total, latest: songId=${songInfo.songId}, position=${songInfo.positionMs}ms")
                                 }
-                                
+
                                 // Update state
                                 val oldSongInfo = _connectState.value.broadcastSongInfo
                                 _connectState.value = _connectState.value.copy(
@@ -293,12 +294,12 @@ class ConnectViewModel : ViewModel() {
                                 if (oldSongInfo?.songId != songInfo.songId) {
                                     Log.w(TAG, "[startWebSocketSync] Broadcast song changed: ${oldSongInfo?.songId} -> ${songInfo.songId}")
                                 }
-                                
+
                                 // Sync with MusicService
                                 Log.d(TAG, "[startWebSocketSync] Calling syncWithPlayer...")
                                 syncWithPlayer(songInfo)
                                 Log.d(TAG, "[startWebSocketSync] syncWithPlayer completed")
-                                
+
                             } catch (e: Exception) {
                                 Log.e(TAG, "!!! [startWebSocketSync] Error parsing message #$messageCount", e)
                                 Log.e(TAG, "!!! [startWebSocketSync] Error details: ${e.javaClass.simpleName}: ${e.message}")
@@ -311,14 +312,14 @@ class ConnectViewModel : ViewModel() {
                             Log.d(TAG, "[startWebSocketSync] Received non-text frame: ${frame::class.simpleName}")
                         }
                     }
-                    
+
                     Log.d(TAG, "[startWebSocketSync] Message loop ended, connection closed")
-                    
+
                 } catch (e: Exception) {
                     Log.e(TAG, "!!! [startWebSocketSync] WebSocket error (attempt ${reconnectAttempts + 1}): ${e.message}", e)
                     Log.e(TAG, "!!! [startWebSocketSync] Error details: ${e.javaClass.simpleName}")
                     e.printStackTrace()
-                    
+
                     // Close session on error
                     Log.d(TAG, "[startWebSocketSync] Closing WebSocket session due to error...")
                     try {
@@ -329,10 +330,10 @@ class ConnectViewModel : ViewModel() {
                     }
                     webSocketSession = null
                     Log.d(TAG, "[startWebSocketSync] WebSocket session cleared")
-                    
+
                     reconnectAttempts++
                     Log.d(TAG, "[startWebSocketSync] Reconnect attempt: $reconnectAttempts/$MAX_RECONNECT_ATTEMPTS")
-                    
+
                     if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
                         Log.e(TAG, "!!! [startWebSocketSync] Max reconnect attempts reached ($MAX_RECONNECT_ATTEMPTS), disconnecting")
                         _connectState.value = _connectState.value.copy(
@@ -342,7 +343,7 @@ class ConnectViewModel : ViewModel() {
                         disconnectFromBroadcast()
                         break
                     }
-                    
+
                     // Exponential backoff
                     Log.d(TAG, "[startWebSocketSync] Reconnecting in ${reconnectDelay}ms (attempt $reconnectAttempts/$MAX_RECONNECT_ATTEMPTS)")
                     delay(reconnectDelay)
@@ -350,23 +351,31 @@ class ConnectViewModel : ViewModel() {
                     Log.d(TAG, "[startWebSocketSync] Next reconnect delay will be: ${reconnectDelay}ms")
                 }
             }
-            
+
             Log.d(TAG, "<<< [startWebSocketSync] WebSocket sync loop ended: isActive=$isActive, isConnected=${_connectState.value.isConnected}")
         }
         Log.d(TAG, "<<< [startWebSocketSync] Success: WebSocket sync job started")
     }
-    
+
     /**
      * Sync MusicService state with broadcaster state
      */
     private suspend fun syncWithPlayer(songInfo: BroadcastSongInfo) {
         Log.d(TAG, ">>> [syncWithPlayer] Entry: songId=${songInfo.songId}, position=${songInfo.positionMs}ms, isPlaying=${songInfo.isPlaying}, serverTime=${songInfo.serverTimestamp}")
 
-        // Step 2: Track song change → proactively reconnect per-song stream
+        // Step 2: Track song change → start at 0 to avoid leading
         if (lastSongId != null && lastSongId != songInfo.songId) {
-            Log.w(TAG, "[syncWithPlayer] Song changed: $lastSongId -> ${songInfo.songId} → reconnecting receiver stream")
+            Log.w(TAG, "[syncWithPlayer] Song changed: $lastSongId -> ${songInfo.songId} → reconnecting and starting at 0")
+            val nowTs = System.currentTimeMillis()
             musicService?.reconnectAudioStream()
+            musicService?.seekToReceiver(0L)
+            musicService?.setReceiverPlaybackSpeed(1.0f)
+            lastSeekTime = nowTs
             lastPosition = 0L
+            runCatching { Log.d("receivertime", "songChangeAlign: receiverPos=0 target=0 speed=" + (musicService?.getReceiverSpeed() ?: 1.0f)) }
+            lastSongId = songInfo.songId
+            Log.d(TAG, "[syncWithPlayer] Song change handled: starting at 0, skipping drift logic this cycle")
+            return
         }
         lastSongId = songInfo.songId
 
@@ -376,17 +385,27 @@ class ConnectViewModel : ViewModel() {
 
         // Step 4: Calculate predicted position
         // Step 5: Estimate one-way latency via arrival timestamp EMA
+        // NOTE: arrivalLatency includes (ClockDiff + NetworkDelay)
+        // We use minLatencyMs to approximate (ClockDiff + minNetworkDelay)
+        // So (arrivalLatency - minLatencyMs) ≈ Jitter
         val arrivalLatency = System.currentTimeMillis() - songInfo.serverTimestamp
-        latencyEmaMs = if (latencyEmaMs == null) arrivalLatency else {
-            val ema = (latencyEmaMs!!.toFloat() * (1f - latencyAlpha) + arrivalLatency.toFloat() * latencyAlpha).toLong()
-            ema
+        
+        // Update minLatency (tracking base offset)
+        if (minLatencyMs == null || arrivalLatency < minLatencyMs!!) {
+            minLatencyMs = arrivalLatency
+            Log.d(TAG, "[syncWithPlayer] New minLatency detected: ${minLatencyMs}ms")
         }
-        val estLatency = latencyEmaMs ?: arrivalLatency
-        Log.d(TAG, "[syncWithPlayer] Latency EMA: ${latencyEmaMs}ms (arrival=${arrivalLatency}ms)")
+        
+        // Calculate effective latency (Jitter + estimated base delay of 40ms)
+        val jitter = arrivalLatency - minLatencyMs!!
+        val effectiveLatency = jitter + 40L // Assume 40ms base network delay
+        
+        Log.d(TAG, "[syncWithPlayer] Latency stats: arrival=${arrivalLatency}ms min=${minLatencyMs}ms jitter=${jitter}ms effective=${effectiveLatency}ms")
 
-        // Step 6: Choose target based on broadcaster position advanced by estimated latency
-        val targetPosition = (songInfo.positionMs + (if (songInfo.isPlaying) estLatency else 0L)).coerceIn(0L, songInfo.durationMs)
-        Log.d(TAG, "[syncWithPlayer] Target position: ${targetPosition}ms (serverPos=${songInfo.positionMs} + estLatency=${estLatency})")
+        // Step 6: Choose target as server position + effective latency
+        // This avoids adding the massive ClockDiff to the target
+        val targetPosition = (songInfo.positionMs + effectiveLatency).coerceIn(0L, songInfo.durationMs)
+        Log.d(TAG, "[syncWithPlayer] Target position: ${targetPosition}ms (serverPos=${songInfo.positionMs} + effLatency=${effectiveLatency})")
 
         // Store the broadcaster's ACTUAL reported position (not predicted) for catch-up after buffering
         musicService?.updateBroadcasterTargetPosition(songInfo.positionMs)
@@ -399,7 +418,7 @@ class ConnectViewModel : ViewModel() {
         Log.d(TAG, "[syncWithPlayer] Drift calculation: drift=${drift}ms, timeSinceLastSeek=${timeSinceLastSeek}ms, threshold=${DRIFT_THRESHOLD_MS}ms, minInterval=${MIN_SEEK_INTERVAL_MS}ms")
 
         val canSeek = timeSinceLastSeek >= MIN_SEEK_INTERVAL_MS
-        val behindThreshold = 200L
+        val behindThreshold = DRIFT_THRESHOLD_MS
         val aheadThreshold = 125L
         Log.d(TAG, "[syncWithPlayer] Seek conditions: canSeek=$canSeek, driftSigned=$driftSigned, behindThreshold=$behindThreshold, aheadThreshold=$aheadThreshold")
 
@@ -411,6 +430,18 @@ class ConnectViewModel : ViewModel() {
                 lastSeekTime = System.currentTimeMillis()
                 lastPosition = targetPosition
                 musicService?.setReceiverPlaybackSpeed(1.0f)
+            }
+            // If receiver is lagging > 100ms (aggressive catch-up)
+            driftSigned > 100L -> {
+                val speed = 1.05f
+                Log.d(TAG, "[syncWithPlayer] Receiver BEHIND by ${driftSigned}ms → speeding up to MAX $speed")
+                musicService?.setReceiverPlaybackSpeed(speed)
+            }
+            // If receiver is lagging > 20ms (gentle catch-up)
+            driftSigned > 20L -> {
+                val speed = 1.02f
+                Log.d(TAG, "[syncWithPlayer] Receiver BEHIND by ${driftSigned}ms → speeding up to $speed")
+                musicService?.setReceiverPlaybackSpeed(speed)
             }
             // If receiver is ahead, slow down slightly to let broadcaster catch up
             driftSigned < -aheadThreshold -> {
@@ -428,7 +459,20 @@ class ConnectViewModel : ViewModel() {
         // Step 8: Sync play/pause state
         val isCurrentlyPlaying = musicService?.isReceiverPlaying() ?: false
         Log.d(TAG, "[syncWithPlayer] Play state: broadcaster=${songInfo.isPlaying}, receiver=$isCurrentlyPlaying")
-        
+
+        // Diagnostic log for user
+        runCatching {
+            val speed = musicService?.getReceiverSpeed() ?: 1.0f
+            val action = when {
+                driftSigned > behindThreshold && canSeek -> "SEEK"
+                driftSigned > 100L -> "SPEED_UP_MAX"
+                driftSigned > 20L -> "SPEED_UP_MIN"
+                driftSigned < -aheadThreshold -> "SLOW_DOWN"
+                else -> "STABLE"
+            }
+            Log.d("receivertime", "sync: drift=${driftSigned}ms action=$action pos=${currentPos}ms target=${targetPosition}ms speed=$speed")
+        }
+
         if (isCurrentlyPlaying != songInfo.isPlaying) {
             if (songInfo.isPlaying) {
                 Log.w(TAG, "[syncWithPlayer] ⏯️ PLAY command → receiver was paused, starting playback NOW")
@@ -450,11 +494,11 @@ class ConnectViewModel : ViewModel() {
             songInfo.positionMs
         }
         Log.d(TAG, "[syncWithPlayer] Updated lastPosition: ${lastPosition}ms")
-        
+
         Log.d(TAG, "<<< [syncWithPlayer] Success: Sync completed")
     }
 
-    
+
     /**
      * Disconnect from broadcast
      */
@@ -462,14 +506,14 @@ class ConnectViewModel : ViewModel() {
         Log.d(TAG, ">>> [disconnectFromBroadcast] Entry")
         val oldState = _connectState.value
         Log.d(TAG, "[disconnectFromBroadcast] Current state: isConnected=${oldState.isConnected}, isConnecting=${oldState.isConnecting}, serverIP=${oldState.serverIP}, token=${oldState.token}")
-        
+
         // Cancel WebSocket job
         val wasJobActive = webSocketJob?.isActive ?: false
         Log.d(TAG, "[disconnectFromBroadcast] WebSocket job state: isActive=$wasJobActive")
         webSocketJob?.cancel()
         webSocketJob = null
         Log.d(TAG, "[disconnectFromBroadcast] WebSocket job cancelled and cleared")
-        
+
         // Close WebSocket session in coroutine
         val hasSession = webSocketSession != null
         Log.d(TAG, "[disconnectFromBroadcast] WebSocket session exists: $hasSession")
@@ -488,31 +532,31 @@ class ConnectViewModel : ViewModel() {
         }
         webSocketSession = null
         Log.d(TAG, "[disconnectFromBroadcast] WebSocket session cleared")
-        
+
         // Stop MusicService receiver mode
         Log.d(TAG, "[disconnectFromBroadcast] Stopping MusicService receiver mode...")
         musicService?.disconnectFromBroadcast()
         Log.d(TAG, "[disconnectFromBroadcast] MusicService disconnected")
-        
+
         _connectState.value = ConnectState()
         Log.d(TAG, "[ConnectState] Reset to initial state: isConnected=false, serverIP=null, token=null")
-        
+
         lastSongId = null
         lastPosition = 0L
         Log.d(TAG, "[disconnectFromBroadcast] State cleared: lastSongId=null, lastPosition=0")
         Log.i(TAG, "<<< [disconnectFromBroadcast] Success: Disconnected from broadcast")
     }
-    
+
     override fun onCleared() {
         Log.d(TAG, ">>> [onCleared] Entry")
         super.onCleared()
-        
+
         Log.d(TAG, "[onCleared] Cleaning up WebSocket job...")
         val wasJobActive = webSocketJob?.isActive ?: false
         webSocketJob?.cancel()
         webSocketJob = null
         Log.d(TAG, "[onCleared] WebSocket job cancelled and cleared (wasActive=$wasJobActive)")
-        
+
         // Close WebSocket session in coroutine
         val hasSession = webSocketSession != null
         Log.d(TAG, "[onCleared] WebSocket session exists: $hasSession")
@@ -527,7 +571,7 @@ class ConnectViewModel : ViewModel() {
             }
         }
         webSocketSession = null
-        
+
         // Close HTTP client in coroutine
         val hasClient = httpClient != null
         Log.d(TAG, "[onCleared] HTTP client exists: $hasClient")
@@ -543,7 +587,7 @@ class ConnectViewModel : ViewModel() {
         }
         httpClient = null
         Log.d(TAG, "[onCleared] HTTP client cleared")
-        
+
         Log.d(TAG, "<<< [onCleared] Success: ConnectViewModel cleared")
     }
 }

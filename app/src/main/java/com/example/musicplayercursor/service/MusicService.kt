@@ -52,7 +52,7 @@ class MusicService : Service() {
         private const val TAG = "MusicService"
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "music_playback_channel"
-        
+
         const val ACTION_PLAY = "com.example.musicplayercursor.ACTION_PLAY"
         const val ACTION_PAUSE = "com.example.musicplayercursor.ACTION_PAUSE"
         const val ACTION_NEXT = "com.example.musicplayercursor.ACTION_NEXT"
@@ -64,7 +64,7 @@ class MusicService : Service() {
     private var mediaSession: MediaSessionCompat? = null
     private val binder = LocalBinder()
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    
+
     // Playback state
     private var currentSong: Song? = null
     private var playlist: List<Song> = emptyList()
@@ -72,7 +72,7 @@ class MusicService : Service() {
     private var currentQueueSource: String? = null
     private var currentIndex: Int = -1
     private var isLooping: Boolean = false
-    
+
     // Receiver mode state
     private var isReceiverMode: Boolean = false
     private var receiverStreamUrl: String? = null
@@ -81,16 +81,16 @@ class MusicService : Service() {
     private var hasSetMediaItem: Boolean = false
     private var receiverProgressJob: Job? = null
     private var receiverPlaybackMonitorJob: Job? = null
-    
+
     // Progress update job
     private var progressUpdateJob: Job? = null
-    
+
     // StateFlow for playback state
     private val _playbackState = MutableStateFlow(PlaybackState())
     val playbackState: StateFlow<PlaybackState> = _playbackState.asStateFlow()
-    
+
     // Callback for notifying ViewModel of state changes (legacy support)
-   // private var stateCallback: MusicServiceCallback? = null
+    // private var stateCallback: MusicServiceCallback? = null
 
     // Callback for MusicViewModel to handle notification actions
     private var viewModelActionCallback: ViewModelActionCallback? = null
@@ -98,7 +98,7 @@ class MusicService : Service() {
     // Track last known position for MediaSession updates
     private var lastKnownPosition: Long = 0L
     private var lastKnownDuration: Long = 0L
-    
+
     inner class LocalBinder : Binder() {
         fun getService(): MusicService = this@MusicService
     }
@@ -119,8 +119,9 @@ class MusicService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        Log.d("FirstPlay", "MusicService: onCreate called")
         Log.d(TAG, "Service onCreate")
-        
+
         createNotificationChannel()
         initializePlayer()
         initializeMediaSession()
@@ -137,43 +138,47 @@ class MusicService : Service() {
                 setShowBadge(false)
                 lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             }
-            
+
             val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             notificationManager.createNotificationChannel(channel)
         }
     }
 
     private fun initializePlayer() {
+        Log.d("FirstPlay", "MusicService: initializePlayer called")
         player = ExoPlayer.Builder(this).build().apply {
             val attrs = AudioAttributes.Builder()
                 .setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_MUSIC)
                 .setUsage(androidx.media3.common.C.USAGE_MEDIA)
                 .build()
             setAudioAttributes(attrs, true)
-            
+
             addListener(object : Player.Listener {
                 override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                     super.onMediaItemTransition(mediaItem, reason)
+                    Log.d("FirstPlay", "MusicService: onMediaItemTransition reason=$reason")
                     Log.d(TAG, "Media item transition: ${currentSong?.title}")
                     if (!isReceiverMode) {
                         updateMediaSessionMetadata()
                         updateNotification()
-                       // stateCallback?.onSongChanged(currentSong)
+                        // stateCallback?.onSongChanged(currentSong)
                         updatePlaybackState()
                     }
                 }
 
                 override fun onIsPlayingChanged(isPlaying: Boolean) {
                     super.onIsPlayingChanged(isPlaying)
+                    Log.d("FirstPlay", "MusicService: onIsPlayingChanged isPlaying=$isPlaying")
                     Log.d(TAG, "Playback state changed: isPlaying=$isPlaying")
                     updateMediaSessionPlaybackState()
                     updateNotification()
-                   // stateCallback?.onPlaybackStateChanged(isPlaying)
+                    // stateCallback?.onPlaybackStateChanged(isPlaying)
                     updatePlaybackState()
                 }
 
                 override fun onPlaybackStateChanged(playbackState: Int) {
                     super.onPlaybackStateChanged(playbackState)
+                    Log.d("FirstPlay", "MusicService: onPlaybackStateChanged state=$playbackState")
                     updateMediaSessionPlaybackState()
                     when (playbackState) {
                         Player.STATE_ENDED -> {
@@ -223,7 +228,7 @@ class MusicService : Service() {
                         }
                     }
                 }
-                
+
                 override fun onPositionDiscontinuity(
                     oldPosition: Player.PositionInfo,
                     newPosition: Player.PositionInfo,
@@ -234,8 +239,9 @@ class MusicService : Service() {
                     updateNotification()
                     updatePlaybackState()
                 }
-                
+
                 override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                    Log.d("FirstPlay", "MusicService: onPlayerError ${error.message}")
                     Log.e(TAG, "!!! [Player] ERROR: ${error.message}", error)
                     if (isReceiverMode) {
                         Log.w(TAG, "[Receiver Player] Attempting recovery from error...")
@@ -245,16 +251,16 @@ class MusicService : Service() {
                 }
             })
         }
-        
+
         // Start progress updates
         startProgressUpdates()
     }
-    
+
     private fun handleReceiverEndState() {
         val duration = player?.duration ?: 0L
         val currentPos = player?.currentPosition ?: 0L
         val isNearEnd = duration > 0 && currentPos >= (duration - 5000)
-        
+
         if (isNearEnd) {
             Log.d(TAG, "[Receiver Player] Near end of song, waiting for next song...")
         } else {
@@ -262,14 +268,20 @@ class MusicService : Service() {
             reconnectReceiverStream()
         }
     }
-    
+
     private fun handleReceiverReadyState() {
+        if (isBuffering) {
+             isBuffering = false
+             broadcasterTargetPosition = null
+             Log.d(TAG, "[Receiver Player] Ready state reached, buffering complete")
+        }
+        /*
         if (isBuffering && broadcasterTargetPosition != null) {
             val broadcasterActualPos = broadcasterTargetPosition!!
             val currentPos = player?.currentPosition ?: 0L
             val catchUpPosition = broadcasterActualPos + 100
             val drift = catchUpPosition - currentPos
-            
+
             if (drift > 300) {
                 serviceScope.launch {
                     delay(50)
@@ -277,49 +289,46 @@ class MusicService : Service() {
                     Log.d(TAG, "[Receiver Player] ✅ Caught up: seeked to ${catchUpPosition}ms")
                 }
             }
-            
+
             isBuffering = false
             broadcasterTargetPosition = null
         }
+        */
     }
-    
-    private fun reconnectReceiverStream() {
+
+    private fun reconnectReceiverStream(startPosition: Long? = null) {
         val streamUrl = receiverStreamUrl ?: CurrentSongRepository.getReceiverStreamUrl()
         if (streamUrl == null) {
             Log.e(TAG, "!!! [reconnectReceiverStream] No stream URL available!")
             return
         }
-        
+
         serviceScope.launch {
             try {
-                Log.w(TAG, "[reconnectReceiverStream] Reconnecting to: $streamUrl")
+                Log.w(TAG, "[reconnectReceiverStream] Reconnecting to: $streamUrl with startPos=$startPosition")
                 val p = player ?: return@launch
-                
-                val broadcasterActualPos = broadcasterTargetPosition ?: p.currentPosition.coerceAtLeast(0L)
-                val catchUpPosition = broadcasterActualPos
-                
+
+                // Use provided start position, or broadcaster target, or current position
+                val catchUpPosition = startPosition ?: broadcasterTargetPosition ?: p.currentPosition.coerceAtLeast(0L)
+
                 p.stop()
                 p.clearMediaItems()
                 isBuffering = true
-                
+
                 val newMediaItem = MediaItem.Builder()
                     .setUri(streamUrl)
-                    .setLiveConfiguration(
-                        androidx.media3.common.MediaItem.LiveConfiguration.Builder()
-                            .setMaxPlaybackSpeed(1.05f)
-                            .setMinPlaybackSpeed(0.95f)
-                            .build()
-                    )
+                    // Removed LiveConfiguration to prevent ExoPlayer from attempting internal live sync
+                    // We handle sync manually in ConnectViewModel
                     .build()
-                
+
                 p.setMediaItem(newMediaItem)
                 p.prepare()
-                
-                // Seek exactly to broadcaster-reported position (no artificial lead)
+
+                // Seek exactly to target position
                 p.seekTo(catchUpPosition.coerceAtLeast(0L))
                 p.playWhenReady = true
                 p.play()
-                
+
                 Log.d(TAG, "[reconnectReceiverStream] ✅ Stream reconnected at position ${catchUpPosition}ms")
             } catch (e: Exception) {
                 Log.e(TAG, "!!! [reconnectReceiverStream] Error reconnecting", e)
@@ -333,7 +342,8 @@ class MusicService : Service() {
      * Used when broadcaster changes track to ensure ExoPlayer requests the new resource with proper Range.
      */
     fun reconnectAudioStream() {
-        reconnectReceiverStream()
+        // Force start at 0 on explicit reconnect (song change)
+        reconnectReceiverStream(0L)
     }
 
     /**
@@ -342,9 +352,17 @@ class MusicService : Service() {
     fun setReceiverPlaybackSpeed(speed: Float) {
         val clamped = speed.coerceIn(0.95f, 1.05f)
         player?.setPlaybackParameters(androidx.media3.common.PlaybackParameters(clamped))
+        runCatching {
+            val pos = player?.currentPosition ?: 0L
+            android.util.Log.d("receivertime", "speedChange=" + clamped + " pos=" + pos + "ms")
+        }
         updatePlaybackState()
     }
-    
+
+    fun getReceiverSpeed(): Float {
+        return player?.playbackParameters?.speed ?: 1.0f
+    }
+
     private fun updatePlaybackState() {
         _playbackState.value = PlaybackState(
             currentSong = currentSong,
@@ -356,7 +374,7 @@ class MusicService : Service() {
             isLooping = isLooping
         )
     }
-    
+
     private fun startProgressUpdates() {
         progressUpdateJob?.cancel()
         progressUpdateJob = serviceScope.launch {
@@ -365,19 +383,19 @@ class MusicService : Service() {
             while (isActive) {
                 delay(100)
                 val p = player ?: continue
-                
+
                 val currentPos = p.currentPosition
                 val duration = p.duration.coerceAtLeast(0L)
-                
+
                 if (duration > 0) {
                     updatePlaybackState()
-                    
+
                     // Update MediaSession playback state every 500ms for smooth progress bar
                     if (kotlin.math.abs(currentPos - lastMediaSessionUpdate) >= 500) {
                         updateMediaSessionPlaybackState()
                         lastMediaSessionUpdate = currentPos
                     }
-                    
+
                     // Save position every 1 second (10 updates)
                     if (kotlin.math.abs(currentPos - lastSavedPosition) >= 1000 && !isReceiverMode) {
                         currentSong?.let { song ->
@@ -454,18 +472,18 @@ class MusicService : Service() {
     }
 
     private fun updateMediaSessionPlaybackState() {
-        val state = if (player?.isPlaying == true) 
-            PlaybackStateCompat.STATE_PLAYING 
-        else 
+        val state = if (player?.isPlaying == true)
+            PlaybackStateCompat.STATE_PLAYING
+        else
             PlaybackStateCompat.STATE_PAUSED
-            
+
         val playbackState = PlaybackStateCompat.Builder()
             .setActions(
                 PlaybackStateCompat.ACTION_PLAY or
-                PlaybackStateCompat.ACTION_PAUSE or
-                PlaybackStateCompat.ACTION_SKIP_TO_NEXT or
-                PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS or
-                PlaybackStateCompat.ACTION_SEEK_TO
+                        PlaybackStateCompat.ACTION_PAUSE or
+                        PlaybackStateCompat.ACTION_SKIP_TO_NEXT or
+                        PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS or
+                        PlaybackStateCompat.ACTION_SEEK_TO
             )
             .setState(
                 state,
@@ -477,41 +495,33 @@ class MusicService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder {
+        Log.d("FirstPlay", "MusicService: onBind called")
         Log.d(TAG, "Service onBind")
         return binder
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.d(TAG, "Service onStartCommand: ${intent?.action}")
+        Log.d("FirstPlay", "MusicService: onStartCommand called")
+        val action = intent?.action
+        Log.d(TAG, "onStartCommand: action=$action")
 
-        when (intent?.action) {
-            ACTION_PLAY, ACTION_PAUSE -> {
-                // If callback exists, forward to ViewModel; otherwise use MusicService's own player
-                if (viewModelActionCallback != null) {
-                    Log.d(TAG, "[onStartCommand] Forwarding play/pause to ViewModel")
-                    viewModelActionCallback?.onPlayPauseRequested()
-                } else {
-                    togglePlayPause()
+        when (action) {
+            ACTION_PLAY -> {
+                if (player?.isPlaying == false) {
+                    player?.play()
+                } else if (player?.playbackState == androidx.media3.common.Player.STATE_IDLE) {
+                    // If player is idle but we have a current song, try to reload it
+                    currentSong?.let {
+                        Log.d(TAG, "onStartCommand: Player idle, reloading current song")
+                        play(it, currentQueueSongIds, currentQueueSource)
+                    }
                 }
             }
-            ACTION_NEXT -> {
-                if (viewModelActionCallback != null) {
-                    Log.d(TAG, "[onStartCommand] Forwarding next to ViewModel")
-                    viewModelActionCallback?.onNextRequested()
-                } else {
-                    playNext()
-                }
-            }
-            ACTION_PREV -> {
-                if (viewModelActionCallback != null) {
-                    Log.d(TAG, "[onStartCommand] Forwarding previous to ViewModel")
-                    viewModelActionCallback?.onPreviousRequested()
-                } else {
-                    playPrevious()
-                }
-            }
+            ACTION_PAUSE -> player?.pause()
+            ACTION_NEXT -> playNext()
+            ACTION_PREV -> playPrevious()
             ACTION_STOP -> {
-                stopForeground(true)
+                player?.stop()
                 stopSelf()
             }
         }
@@ -535,15 +545,15 @@ class MusicService : Service() {
     }
 
     fun getCurrentPosition(): Long = player?.currentPosition ?: 0L
-    
+
     fun getDuration(): Long = player?.duration?.coerceAtLeast(0L) ?: 0L
-    
+
     fun isPlaying(): Boolean = player?.isPlaying ?: false
-    
+
     fun getCurrentSong(): Song? = currentSong
-    
+
     // ========== Receiver Mode Methods ==========
-    
+
     /**
      * Connect to broadcast stream
      */
@@ -557,7 +567,7 @@ class MusicService : Service() {
                 receiverStreamUrl = streamUrl
                 hasSetMediaItem = false
                 Log.d(TAG, "[connectToBroadcast] Receiver mode enabled: $oldReceiverMode -> $isReceiverMode")
-                
+
                 val mediaItem = MediaItem.Builder()
                     .setUri(streamUrl)
                     .setLiveConfiguration(
@@ -567,7 +577,7 @@ class MusicService : Service() {
                             .build()
                     )
                     .build()
-                
+
                 player?.apply {
                     if (!hasSetMediaItem) {
                         setMediaItem(mediaItem)
@@ -575,7 +585,7 @@ class MusicService : Service() {
                     } else {
                         setMediaItem(mediaItem)
                     }
-                    
+
                     repeatMode = androidx.media3.common.Player.REPEAT_MODE_OFF
                     prepare()
                     playWhenReady = true
@@ -584,7 +594,7 @@ class MusicService : Service() {
                     Log.e(TAG, "!!! [connectToBroadcast] Error: player is null!")
                     return@launch
                 }
-                
+
                 CurrentSongRepository.saveCurrentSong(
                     songId = null,
                     position = 0L,
@@ -592,12 +602,12 @@ class MusicService : Service() {
                     isReceiverMode = true,
                     receiverStreamUrl = streamUrl
                 )
-                
+
                 hideNotification()
                 startReceiverProgressUpdates()
                 startReceiverPlaybackMonitor()
                 updatePlaybackState()
-                
+
                 Log.i(TAG, "<<< [connectToBroadcast] Success: CONNECTED & SYNC STARTED!")
             } catch (e: Exception) {
                 Log.e(TAG, "!!! [connectToBroadcast] Error connecting to broadcast", e)
@@ -607,7 +617,7 @@ class MusicService : Service() {
             }
         }
     }
-    
+
     /**
      * Disconnect from broadcast
      */
@@ -616,39 +626,39 @@ class MusicService : Service() {
         val oldReceiverMode = isReceiverMode
         isReceiverMode = false
         receiverStreamUrl = null
-        
+
         receiverPlaybackMonitorJob?.cancel()
         receiverPlaybackMonitorJob = null
-        
+
         receiverProgressJob?.cancel()
         receiverProgressJob = null
-        
+
         hasSetMediaItem = false
-        
+
         player?.apply {
             stop()
             clearMediaItems()
         }
-        
+
         CurrentSongRepository.saveCurrentSong(
             songId = null,
             position = 0L,
             isPlaying = false,
             isReceiverMode = false
         )
-        
+
         broadcasterTargetPosition = null
         isBuffering = false
-        
+
         // Show notification again if there's a local song playing
         currentSong?.let { song ->
             showNotificationForViewModel(song, player?.isPlaying ?: false)
         }
-        
+
         updatePlaybackState()
         Log.i(TAG, "<<< [disconnectFromBroadcast] Success: Disconnected from broadcast")
     }
-    
+
     /**
      * Seek receiver player
      */
@@ -660,7 +670,7 @@ class MusicService : Service() {
         updatePlaybackState()
         updateMediaSessionPlaybackState() // Immediately update MediaSession for notification progress bar
     }
-    
+
     /**
      * Play receiver
      */
@@ -669,26 +679,26 @@ class MusicService : Service() {
             Log.e(TAG, "!!! [playReceiver] Player is null!")
             return
         }
-        
+
         val playbackState = p.playbackState
         val isReady = playbackState == androidx.media3.common.Player.STATE_READY ||
                 playbackState == androidx.media3.common.Player.STATE_BUFFERING
-        
+
         if (playbackState == androidx.media3.common.Player.STATE_ENDED) {
             Log.w(TAG, "[playReceiver] Player is in ENDED state, reconnecting stream...")
             reconnectReceiverStream()
             return
         }
-        
+
         if (!isReady && playbackState == androidx.media3.common.Player.STATE_IDLE) {
             p.prepare()
         }
-        
+
         p.playWhenReady = true
         p.play()
         updatePlaybackState()
     }
-    
+
     /**
      * Pause receiver
      */
@@ -698,35 +708,35 @@ class MusicService : Service() {
         p.pause()
         updatePlaybackState()
     }
-    
+
     /**
      * Check if receiver is playing
      */
     fun isReceiverPlaying(): Boolean {
         return player?.isPlaying ?: false
     }
-    
+
     /**
      * Get receiver current position
      */
     fun getReceiverPosition(): Long {
         return player?.currentPosition ?: 0L
     }
-    
+
     /**
      * Get receiver duration
      */
     fun getReceiverDuration(): Long {
         return player?.duration?.coerceAtLeast(0L) ?: 0L
     }
-    
+
     /**
      * Check if in receiver mode
      */
     fun isInReceiverMode(): Boolean {
         return isReceiverMode
     }
-    
+
     /**
      * Update broadcaster target position (for catch-up after buffering)
      */
@@ -736,7 +746,7 @@ class MusicService : Service() {
             Log.d(TAG, "[updateBroadcasterTargetPosition] Updated target: ${positionMs}ms")
         }
     }
-    
+
     private fun startReceiverProgressUpdates() {
         receiverProgressJob?.cancel()
         receiverProgressJob = serviceScope.launch {
@@ -745,14 +755,14 @@ class MusicService : Service() {
                 val p = player ?: break
                 val currentPos = p.currentPosition
                 val duration = p.duration.coerceAtLeast(0L)
-                
+
                 if (duration > 0L) {
                     updatePlaybackState()
                 }
             }
         }
     }
-    
+
     private fun startReceiverPlaybackMonitor() {
         receiverPlaybackMonitorJob?.cancel()
         receiverPlaybackMonitorJob = serviceScope.launch {
@@ -763,7 +773,7 @@ class MusicService : Service() {
                 val playbackState = p.playbackState
                 val shouldBePlaying = p.playWhenReady
                 val isActuallyPlaying = p.isPlaying
-                
+
                 if (shouldBePlaying && !isActuallyPlaying) {
                     consecutiveStoppedChecks++
                     if (consecutiveStoppedChecks >= 2) {
@@ -794,42 +804,47 @@ class MusicService : Service() {
             }
         }
     }
-    
+
     // ========== Local Playback Methods (Refactored) ==========
-    
+
     /**
      * Play a song with queue context
      */
     fun play(song: Song, queueIds: List<Long>? = null, source: String? = null) {
+        Log.d("FirstPlay", "MusicService: play() called for ${song.title}, queueSize: ${queueIds?.size}, source: $source")
         if (isReceiverMode) {
             Log.d(TAG, "[play] BLOCKED: Cannot play local song while in receiver mode")
+            Log.d("FirstPlay", "MusicService: play() BLOCKED due to Receiver Mode")
             return
         }
-        
+
         if (queueIds != null) {
             currentQueueSongIds = queueIds
             currentQueueSource = source
+            Log.d("FirstPlay", "MusicService: play() Updated queue ids: ${queueIds.size}")
         }
-        
+
         Log.d(TAG, "play: ${song.title}")
         PlayCountRepository.incrementPlayCount(song.id)
         LastPlayedRepository.setLastPlayed(song.id, System.currentTimeMillis())
-        
+
         currentSong = song
-        
+
         val index = if (queueIds != null) queueIds.indexOf(song.id) else -1
         if (index >= 0) {
             currentIndex = index
         }
-        
+
         player?.apply {
+            Log.d("FirstPlay", "MusicService: play() Preparing player")
             stop()
             clearMediaItems()
             setMediaItem(MediaItem.fromUri(song.contentUri))
             prepare()
             play()
+            Log.d("FirstPlay", "MusicService: play() Player prepared and play() called")
         }
-        
+
         startForeground(NOTIFICATION_ID, createNotification())
         updateMediaSessionMetadata()
         updateMediaSessionPlaybackState()
@@ -842,10 +857,10 @@ class MusicService : Service() {
             isPlaying = true,
             isReceiverMode = false
         )
-        
+
         updatePlaybackState()
     }
-    
+
     /**
      * Play from queue
      */
@@ -854,17 +869,17 @@ class MusicService : Service() {
             Log.d(TAG, "[playFromQueue] BLOCKED: Cannot play local song while in receiver mode")
             return
         }
-        
+
         if (queueIds != null) {
             currentQueueSongIds = queueIds
             currentQueueSource = source
         }
-        
+
         // Find song in current songs list (would need to be passed or accessed differently)
         // For now, this is a placeholder - the actual song lookup should be done by ViewModel
         Log.d(TAG, "[playFromQueue] Called with songId=$startSongId, source=$source")
     }
-    
+
     /**
      * Toggle play/pause
      */
@@ -873,18 +888,18 @@ class MusicService : Service() {
             Log.d(TAG, "[togglePlayPause] BLOCKED: Cannot toggle local playback while in receiver mode")
             return
         }
-        
+
         player?.let { p ->
             if (p.isPlaying) {
                 p.pause()
-              //  stateCallback?.onPlaybackStateChanged(false)
+                //  stateCallback?.onPlaybackStateChanged(false)
             } else {
                 p.play()
-               // stateCallback?.onPlaybackStateChanged(true)
+                // stateCallback?.onPlaybackStateChanged(true)
             }
             updateNotification()
             updatePlaybackState()
-            
+
             currentSong?.let { song ->
                 CurrentSongRepository.saveCurrentSong(
                     songId = song.id,
@@ -895,27 +910,28 @@ class MusicService : Service() {
             }
         }
     }
-    
+
     /**
      * Play next song
      */
     fun playNext() {
+
         if (isReceiverMode) {
             Log.d(TAG, "[playNext] BLOCKED: Cannot play next song while in receiver mode")
             return
         }
-        
+
         if (currentQueueSongIds.isEmpty() || currentIndex < 0) {
             Log.w(TAG, "No queue or invalid index")
             return
         }
-        
+
         val nextIndex = if (currentIndex < currentQueueSongIds.size - 1) {
             currentIndex + 1
         } else {
             0 // Loop back to first
         }
-        
+
         val nextId = currentQueueSongIds.getOrNull(nextIndex)
         if (nextId != null) {
             // Try to use callback first, otherwise log
@@ -929,7 +945,7 @@ class MusicService : Service() {
             }
         }
     }
-    
+
     /**
      * Play previous song
      */
@@ -938,12 +954,12 @@ class MusicService : Service() {
             Log.d(TAG, "[playPrevious] BLOCKED: Cannot play previous song while in receiver mode")
             return
         }
-        
+
         if (currentQueueSongIds.isEmpty() || currentIndex <= 0) {
             Log.w(TAG, "No queue or at first song")
             return
         }
-        
+
         val prevIndex = currentIndex - 1
         val prevId = currentQueueSongIds.getOrNull(prevIndex)
         if (prevId != null) {
@@ -951,7 +967,7 @@ class MusicService : Service() {
             Log.d(TAG, "[playPrevious] Previous song ID: $prevId")
         }
     }
-    
+
     /**
      * Seek to position
      */
@@ -960,7 +976,7 @@ class MusicService : Service() {
             Log.d(TAG, "[seekTo] BLOCKED: Cannot seek local playback while in receiver mode")
             return
         }
-        
+
         val targetPosition = positionMs.coerceIn(0L, player?.duration?.coerceAtLeast(0L) ?: 0L)
         player?.seekTo(targetPosition)
         updatePlaybackState()
@@ -1178,7 +1194,7 @@ class MusicService : Service() {
         val song = currentSong
         val title = song?.title ?: "No song playing"
         val artist = song?.artist ?: "Unknown artist"
-        
+
         // Intent to open app when notification is clicked
         val contentIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
@@ -1189,7 +1205,7 @@ class MusicService : Service() {
             contentIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        
+
         // Action intents
         val playPauseIntent = PendingIntent.getService(
             this,
@@ -1197,28 +1213,28 @@ class MusicService : Service() {
             Intent(this, MusicService::class.java).apply { action = ACTION_PLAY },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        
+
         val nextIntent = PendingIntent.getService(
             this,
             0,
             Intent(this, MusicService::class.java).apply { action = ACTION_NEXT },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        
+
         val prevIntent = PendingIntent.getService(
             this,
             0,
             Intent(this, MusicService::class.java).apply { action = ACTION_PREV },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        
+
         // Determine play/pause icon
         val playPauseIcon = if (player?.isPlaying == true) {
             android.R.drawable.ic_media_pause
         } else {
             android.R.drawable.ic_media_play
         }
-        
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(title)
             .setContentText(artist)
@@ -1247,18 +1263,18 @@ class MusicService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         Log.d(TAG, "Service onDestroy")
-        
+
         progressUpdateJob?.cancel()
         receiverProgressJob?.cancel()
         receiverPlaybackMonitorJob?.cancel()
-        
+
         mediaSession?.release()
         mediaSession = null
-        
+
         player?.release()
         player = null
-        
-      //  stateCallback = null
+
+        //  stateCallback = null
         viewModelActionCallback = null
     }
 
@@ -1269,13 +1285,13 @@ class MusicService : Service() {
         if (currentQueueSongIds.isEmpty() || currentIndex < 0) {
             return null
         }
-        
+
         val nextIndex = if (currentIndex < currentQueueSongIds.size - 1) {
             currentIndex + 1
         } else {
             0 // Loop back to first
         }
-        
+
         return currentQueueSongIds.getOrNull(nextIndex)
     }
 }

@@ -24,6 +24,9 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
 import com.example.musicplayercursor.ui.theme.MusicPlayercursorTheme
@@ -47,33 +50,36 @@ class MainActivity : ComponentActivity() {
             Manifest.permission.READ_EXTERNAL_STORAGE
     )
     
-    private var musicService: MusicService? = null
-    private var serviceBound = false
+    private var musicService by mutableStateOf<MusicService?>(null)
+    private var serviceBound by mutableStateOf(false)
     
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+            Log.d("FirstPlay", "MainActivity: onServiceConnected called")
             val binder = service as MusicService.LocalBinder
             musicService = binder.getService()
             serviceBound = true
-            Log.d("MainActivity", "Service connected")
+            Log.d("FirstPlay", "MainActivity: Service connected, musicService=$musicService")
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
+            Log.d("FirstPlay", "MainActivity: onServiceDisconnected called")
             musicService = null
             serviceBound = false
-            Log.d("MainActivity", "Service disconnected")
         }
     }
     
     @SuppressLint("ViewModelConstructorInComposable")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Log.d("FirstPlay", "MainActivity: onCreate started")
         enableEdgeToEdge()
         
         // Start and bind to MusicService
         val serviceIntent = Intent(this, MusicService::class.java)
         startService(serviceIntent)
         bindService(serviceIntent, serviceConnection, Context.BIND_AUTO_CREATE)
+        Log.d("FirstPlay", "MainActivity: Service started and bind requested")
         
         setContent {
 
@@ -87,7 +93,9 @@ class MainActivity : ComponentActivity() {
 
 // Pass MusicService to ViewModels when service is connected
                 LaunchedEffect(serviceBound) {
+                    Log.d("FirstPlay", "MainActivity: LaunchedEffect(serviceBound) triggered. serviceBound=$serviceBound, musicService=$musicService")
                     if (serviceBound && musicService != null) {
+                        Log.d("FirstPlay", "MainActivity: Setting music service to ViewModels")
                         viewModel.setMusicService(musicService)
                         connectViewModel.setMusicService(musicService)
                         broadcastViewModel.setMusicService(musicService)
@@ -96,6 +104,7 @@ class MainActivity : ComponentActivity() {
 
 // Also update when service connection changes
                 LaunchedEffect(musicService) {
+                    Log.d("FirstPlay", "MainActivity: LaunchedEffect(musicService) triggered. musicService=$musicService")
                     musicService?.let { service ->
                         viewModel.setMusicService(service)
                         connectViewModel.setMusicService(service)

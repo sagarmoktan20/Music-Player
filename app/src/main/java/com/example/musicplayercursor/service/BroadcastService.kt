@@ -583,116 +583,116 @@ class BroadcastService : Service() {
         }
     }
 
-    private fun startSyncJob() {
-        Log.d(TAG, ">>> [startSyncJob] Entry")
-        if (syncJob != null && syncJob!!.isActive) {
-            Log.w(TAG, "⚠️ [startSyncJob] Sync job already running")
-            return
-        }
+        private fun startSyncJob() {
+            Log.d(TAG, ">>> [startSyncJob] Entry")
+            if (syncJob != null && syncJob!!.isActive) {
+                Log.w(TAG, "⚠️ [startSyncJob] Sync job already running")
+                return
+            }
 
-        syncJob = serverScope.launch {
-            Log.d(TAG, "[startSyncJob] Broadcast loop started (50ms interval - 20 updates/sec)")
-            var updateCount = 0L
-            var loopIteration = 0L
-            
-            while (isActive && connectedClients.isNotEmpty()) {
-                loopIteration++
-                try {
-                    Log.d(TAG, "[startSyncJob] Loop iteration #$loopIteration, connected clients: ${connectedClients.size}")
-                    
-                    val callback = getPlaybackStateCallback()
-                    if (callback == null) {
-                        Log.w(TAG, "⚠️ [startSyncJob] Callback not ready, skipping update (iteration #$loopIteration)")
-                        delay(50)
-                        continue
-                    }
-                    Log.d(TAG, "[startSyncJob] Callback ready, getting playback state...")
+            syncJob = serverScope.launch {
+                Log.d(TAG, "[startSyncJob] Broadcast loop started (50ms interval - 20 updates/sec)")
+                var updateCount = 0L
+                var loopIteration = 0L
 
-                    val song = callback.getCurrentSong()
-                    if (song == null) {
-                        Log.d(TAG, "[startSyncJob] No song playing, skipping update (iteration #$loopIteration)")
-                        delay(50)
-                        continue
-                    }
-                    Log.d(TAG, "[startSyncJob] Song found: ${song.title} (id=${song.id})")
+                while (isActive && connectedClients.isNotEmpty()) {
+                    loopIteration++
+                    try {
+                        Log.d(TAG, "[startSyncJob] Loop iteration #$loopIteration, connected clients: ${connectedClients.size}")
 
-                    val position = callback.getCurrentPosition()
-                    val duration = callback.getDuration()
-                    val isPlaying = callback.isPlaying()
-                    val serverTimestamp = System.currentTimeMillis()
-                    Log.d(TAG, "[startSyncJob] Playback state: songId=${song.id}, position=${position}ms, duration=${duration}ms, isPlaying=$isPlaying, timestamp=$serverTimestamp")
-
-                    val songInfo = BroadcastSongInfo(
-                        songId = song.id,
-                        title = song.title,
-                        artist = song.artist,
-                        durationMs = duration,
-                        positionMs = position,
-                        isPlaying = isPlaying,
-                        serverTimestamp = serverTimestamp
-                    )
-
-                    // Serialize to JSON
-                    val json = Json { ignoreUnknownKeys = true }
-                    val message = json.encodeToString(BroadcastSongInfo.serializer(), songInfo)
-                    Log.d(TAG, "[startSyncJob] Serialized message length: ${message.length} bytes")
-
-                    // Broadcast to all connected clients
-                    val clientsToRemove = mutableSetOf<DefaultWebSocketServerSession>()
-                    var successfulSends = 0
-                    var failedSends = 0
-                    for (client in connectedClients) {
-                        try {
-                            client.send(Frame.Text(message))
-                            successfulSends++
-                            updateCount++
-                            if (updateCount % 200 == 0L) {
-                                Log.d(TAG, "[startSyncJob] Sent $updateCount updates to ${connectedClients.size} clients (successful: $successfulSends, failed: $failedSends)")
-                            }
-                        } catch (e: Exception) {
-                            failedSends++
-                            Log.w(TAG, "⚠️ [startSyncJob] Error sending to client, will remove: ${e.message}")
-                            clientsToRemove.add(client)
+                        val callback = getPlaybackStateCallback()
+                        if (callback == null) {
+                            Log.w(TAG, "⚠️ [startSyncJob] Callback not ready, skipping update (iteration #$loopIteration)")
+                            delay(100)
+                            continue
                         }
-                    }
-                    if (updateCount % 200 != 0L) {
-                        Log.d(TAG, "[startSyncJob] Broadcast complete: sent to $successfulSends/${connectedClients.size} clients, failed: $failedSends")
-                    }
+                        Log.d(TAG, "[startSyncJob] Callback ready, getting playback state...")
 
-                    // Remove disconnected clients
-                    if (clientsToRemove.isNotEmpty()) {
-                        Log.w(TAG, "[startSyncJob] Removing ${clientsToRemove.size} disconnected clients")
-                        for (client in clientsToRemove) {
-                            connectedClients.remove(client)
+                        val song = callback.getCurrentSong()
+                        if (song == null) {
+                            Log.d(TAG, "[startSyncJob] No song playing, skipping update (iteration #$loopIteration)")
+                            delay(100)
+                            continue
+                        }
+                        Log.d(TAG, "[startSyncJob] Song found: ${song.title} (id=${song.id})")
+
+                        val position = callback.getCurrentPosition()
+                        val duration = callback.getDuration()
+                        val isPlaying = callback.isPlaying()
+                        val serverTimestamp = System.currentTimeMillis()
+                        Log.d(TAG, "[startSyncJob] Playback state: songId=${song.id}, position=${position}ms, duration=${duration}ms, isPlaying=$isPlaying, timestamp=$serverTimestamp")
+
+                        val songInfo = BroadcastSongInfo(
+                            songId = song.id,
+                            title = song.title,
+                            artist = song.artist,
+                            durationMs = duration,
+                            positionMs = position,
+                            isPlaying = isPlaying,
+                            serverTimestamp = serverTimestamp
+                        )
+
+                        // Serialize to JSON
+                        val json = Json { ignoreUnknownKeys = true }
+                        val message = json.encodeToString(BroadcastSongInfo.serializer(), songInfo)
+                        Log.d(TAG, "[startSyncJob] Serialized message length: ${message.length} bytes")
+
+                        // Broadcast to all connected clients
+                        val clientsToRemove = mutableSetOf<DefaultWebSocketServerSession>()
+                        var successfulSends = 0
+                        var failedSends = 0
+                        for (client in connectedClients) {
                             try {
-                                client.close()
-                                Log.d(TAG, "[startSyncJob] Disconnected client closed successfully")
+                                client.send(Frame.Text(message))
+                                successfulSends++
+                                updateCount++
+                                if (updateCount % 200 == 0L) {
+                                    Log.d(TAG, "[startSyncJob] Sent $updateCount updates to ${connectedClients.size} clients (successful: $successfulSends, failed: $failedSends)")
+                                }
                             } catch (e: Exception) {
-                                Log.w(TAG, "⚠️ [startSyncJob] Error closing disconnected client: ${e.message}")
+                                failedSends++
+                                Log.w(TAG, "⚠️ [startSyncJob] Error sending to client, will remove: ${e.message}")
+                                clientsToRemove.add(client)
                             }
                         }
-                        Log.d(TAG, "[startSyncJob] Remaining clients: ${connectedClients.size}")
+                        if (updateCount % 200 != 0L) {
+                            Log.d(TAG, "[startSyncJob] Broadcast complete: sent to $successfulSends/${connectedClients.size} clients, failed: $failedSends")
+                        }
+
+                        // Remove disconnected clients
+                        if (clientsToRemove.isNotEmpty()) {
+                            Log.w(TAG, "[startSyncJob] Removing ${clientsToRemove.size} disconnected clients")
+                            for (client in clientsToRemove) {
+                                connectedClients.remove(client)
+                                try {
+                                    client.close()
+                                    Log.d(TAG, "[startSyncJob] Disconnected client closed successfully")
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "⚠️ [startSyncJob] Error closing disconnected client: ${e.message}")
+                                }
+                            }
+                            Log.d(TAG, "[startSyncJob] Remaining clients: ${connectedClients.size}")
+                        }
+
+                        if (connectedClients.isEmpty()) {
+                            Log.w(TAG, "[startSyncJob] No clients remaining, stopping broadcast loop")
+                            break
+                        }
+
+                    } catch (e: Exception) {
+                        Log.e(TAG, "!!! [startSyncJob] Error in broadcast loop (iteration #$loopIteration)", e)
+                        Log.e(TAG, "!!! [startSyncJob] Error details: ${e.javaClass.simpleName}: ${e.message}")
+                        e.printStackTrace()
                     }
 
-                    if (connectedClients.isEmpty()) {
-                        Log.w(TAG, "[startSyncJob] No clients remaining, stopping broadcast loop")
-                        break
-                    }
-
-                } catch (e: Exception) {
-                    Log.e(TAG, "!!! [startSyncJob] Error in broadcast loop (iteration #$loopIteration)", e)
-                    Log.e(TAG, "!!! [startSyncJob] Error details: ${e.javaClass.simpleName}: ${e.message}")
-                    e.printStackTrace()
+                    delay(100) // 20 updates per second (50ms interval) for balanced performance
+                    Log.d(TAG, "[startSyncJob] Waiting 50ms before next update...")
                 }
 
-                delay(50) // 20 updates per second (50ms interval) for balanced performance
-                Log.d(TAG, "[startSyncJob] Waiting 50ms before next update...")
+                Log.d(TAG, "<<< [startSyncJob] Broadcast loop ended")
             }
-            
-            Log.d(TAG, "<<< [startSyncJob] Broadcast loop ended")
+            Log.d(TAG, "<<< [startSyncJob] Success: Sync job started")
         }
-        Log.d(TAG, "<<< [startSyncJob] Success: Sync job started")
-    }
 
     private fun stopBroadcast() {
         Log.d(TAG, ">>> [stopBroadcast] Entry")
