@@ -25,6 +25,8 @@ import com.example.musicplayercursor.model.Song
 import com.example.musicplayercursor.repository.CurrentSongRepository
 import com.example.musicplayercursor.repository.LastPlayedRepository
 import com.example.musicplayercursor.repository.PlayCountRepository
+import com.example.musicplayercursor.repository.SongRepository
+import com.example.musicplayercursor.repository.QueueRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -68,8 +70,7 @@ class MusicService : Service() {
     // Playback state
     private var currentSong: Song? = null
     private var playlist: List<Song> = emptyList()
-    private var currentQueueSongIds: List<Long> = emptyList()
-    private var currentQueueSource: String? = null
+    // Queue is now managed by QueueRepository
     private var currentIndex: Int = -1
     private var isLooping: Boolean = false
 
@@ -93,7 +94,7 @@ class MusicService : Service() {
     // private var stateCallback: MusicServiceCallback? = null
 
     // Callback for MusicViewModel to handle notification actions
-    private var viewModelActionCallback: ViewModelActionCallback? = null
+    // Removed ViewModelActionCallback as it is no longer used
 
     // Track last known position for MediaSession updates
     private var lastKnownPosition: Long = 0L
@@ -109,18 +110,18 @@ class MusicService : Service() {
 //        fun onPositionChanged(position: Long, duration: Long)
 //    }
 
-    // Callback for MusicViewModel to handle notification actions
-    interface ViewModelActionCallback {
-        fun onPlayPauseRequested()
-        fun onNextRequested()
-        fun onPreviousRequested()
-        fun onNextSongRequested(nextSongId: Long)
-    }
+    // Removed ViewModelActionCallback as we now use Repository pattern
+    // private var viewModelActionCallback: ViewModelActionCallback? = null
 
     override fun onCreate() {
         super.onCreate()
         Log.d("FirstPlay", "MusicService: onCreate called")
         Log.d(TAG, "Service onCreate")
+
+        // Initialize Repositories
+        // Do not pre-load songs here; permissions may not be granted yet
+        CurrentSongRepository.init(applicationContext)
+        // QueueRepository is an object, so it's initialized on access
 
         createNotificationChannel()
         initializePlayer()
@@ -191,15 +192,8 @@ class MusicService : Service() {
                                     player?.seekTo(0)
                                     player?.play()
                                 } else {
-                                    // Play next song - use callback if available, otherwise try direct play
-                                    if (viewModelActionCallback != null) {
-                                        val nextSongId = getNextSongId()
-                                        if (nextSongId != null) {
-                                            viewModelActionCallback?.onNextSongRequested(nextSongId)
-                                        }
-                                    } else {
-                                        playNext()
-                                    }
+                                    // Play next song using Repository
+                                    playNext()
                                 }
                             }
                         }
@@ -419,35 +413,19 @@ class MusicService : Service() {
             setCallback(object : MediaSessionCompat.Callback() {
                 override fun onPlay() {
                     Log.d(TAG, "[MediaSession] onPlay called")
-                    if (viewModelActionCallback != null) {
-                        viewModelActionCallback?.onPlayPauseRequested()
-                    } else {
-                        togglePlayPause()
-                    }
+                    togglePlayPause()
                 }
                 override fun onPause() {
                     Log.d(TAG, "[MediaSession] onPause called")
-                    if (viewModelActionCallback != null) {
-                        viewModelActionCallback?.onPlayPauseRequested()
-                    } else {
-                        togglePlayPause()
-                    }
+                    togglePlayPause()
                 }
                 override fun onSkipToNext() {
                     Log.d(TAG, "[MediaSession] onSkipToNext called")
-                    if (viewModelActionCallback != null) {
-                        viewModelActionCallback?.onNextRequested()
-                    } else {
-                        playNext()
-                    }
+                    playNext()
                 }
                 override fun onSkipToPrevious() {
                     Log.d(TAG, "[MediaSession] onSkipToPrevious called")
-                    if (viewModelActionCallback != null) {
-                        viewModelActionCallback?.onPreviousRequested()
-                    } else {
-                        playPrevious()
-                    }
+                    playPrevious()
                 }
                 override fun onSeekTo(pos: Long) {
                     Log.d(TAG, "[MediaSession] onSeekTo called: $pos")
@@ -513,7 +491,7 @@ class MusicService : Service() {
                     // If player is idle but we have a current song, try to reload it
                     currentSong?.let {
                         Log.d(TAG, "onStartCommand: Player idle, reloading current song")
-                        play(it, currentQueueSongIds, currentQueueSource)
+                        play(it, QueueRepository.queue.value, "restored")
                     }
                 }
             }
@@ -533,10 +511,10 @@ class MusicService : Service() {
 //        stateCallback = callback
 //    }
 
-    fun setViewModelActionCallback(callback: ViewModelActionCallback?) {
-        viewModelActionCallback = callback
-        Log.d(TAG, "[setViewModelActionCallback] Callback set: ${callback != null}")
-    }
+//    fun setViewModelActionCallback(callback: ViewModelActionCallback?) {
+//        viewModelActionCallback = callback
+//        Log.d(TAG, "[setViewModelActionCallback] Callback set: ${callback != null}")
+//    }
 
     fun setLooping(enabled: Boolean) {
         isLooping = enabled
@@ -652,7 +630,7 @@ class MusicService : Service() {
 
         // Show notification again if there's a local song playing
         currentSong?.let { song ->
-            showNotificationForViewModel(song, player?.isPlaying ?: false)
+            updateNotification()
         }
 
         updatePlaybackState()
@@ -810,8 +788,8 @@ class MusicService : Service() {
     /**
      * Play a song with queue context
      */
-    fun play(song: Song, queueIds: List<Long>? = null, source: String? = null) {
-        Log.d("FirstPlay", "MusicService: play() called for ${song.title}, queueSize: ${queueIds?.size}, source: $source")
+    fun play(song: Song, queueIds: List<Long>? = null, source: String? = null, startPosition: Long = 0L) {
+        Log.d("FirstPlay", "MusicService: play() called for ${song.title}, queueSize: ${queueIds?.size}, source: $source, startPos: $startPosition")
         if (isReceiverMode) {
             Log.d(TAG, "[play] BLOCKED: Cannot play local song while in receiver mode")
             Log.d("FirstPlay", "MusicService: play() BLOCKED due to Receiver Mode")
@@ -819,18 +797,19 @@ class MusicService : Service() {
         }
 
         if (queueIds != null) {
-            currentQueueSongIds = queueIds
-            currentQueueSource = source
+            QueueRepository.setQueue(queueIds)
             Log.d("FirstPlay", "MusicService: play() Updated queue ids: ${queueIds.size}")
         }
 
-        Log.d(TAG, "play: ${song.title}")
+        Log.d(TAG, "play: ${song.title} starting at $startPosition")
         PlayCountRepository.incrementPlayCount(song.id)
         LastPlayedRepository.setLastPlayed(song.id, System.currentTimeMillis())
 
         currentSong = song
+        QueueRepository.setCurrentSongId(song.id)
 
-        val index = if (queueIds != null) queueIds.indexOf(song.id) else -1
+        val currentQueue = QueueRepository.queue.value
+        val index = currentQueue.indexOf(song.id)
         if (index >= 0) {
             currentIndex = index
         }
@@ -839,10 +818,10 @@ class MusicService : Service() {
             Log.d("FirstPlay", "MusicService: play() Preparing player")
             stop()
             clearMediaItems()
-            setMediaItem(MediaItem.fromUri(song.contentUri))
+            setMediaItem(MediaItem.fromUri(song.contentUri), startPosition)
             prepare()
             play()
-            Log.d("FirstPlay", "MusicService: play() Player prepared and play() called")
+            Log.d("FirstPlay", "MusicService: play() Player prepared and play() called with startPosition: $startPosition")
         }
 
         startForeground(NOTIFICATION_ID, createNotification())
@@ -853,7 +832,7 @@ class MusicService : Service() {
 //
         CurrentSongRepository.saveCurrentSong(
             songId = song.id,
-            position = 0L,
+            position = startPosition,
             isPlaying = true,
             isReceiverMode = false
         )
@@ -871,8 +850,7 @@ class MusicService : Service() {
         }
 
         if (queueIds != null) {
-            currentQueueSongIds = queueIds
-            currentQueueSource = source
+            QueueRepository.setQueue(queueIds)
         }
 
         // Find song in current songs list (would need to be passed or accessed differently)
@@ -915,34 +893,24 @@ class MusicService : Service() {
      * Play next song
      */
     fun playNext() {
-
         if (isReceiverMode) {
             Log.d(TAG, "[playNext] BLOCKED: Cannot play next song while in receiver mode")
             return
         }
 
-        if (currentQueueSongIds.isEmpty() || currentIndex < 0) {
-            Log.w(TAG, "No queue or invalid index")
-            return
-        }
+        val currentId = currentSong?.id ?: return
+        val nextId = QueueRepository.getNextSongId(currentId)
 
-        val nextIndex = if (currentIndex < currentQueueSongIds.size - 1) {
-            currentIndex + 1
-        } else {
-            0 // Loop back to first
-        }
-
-        val nextId = currentQueueSongIds.getOrNull(nextIndex)
         if (nextId != null) {
-            // Try to use callback first, otherwise log
-            if (viewModelActionCallback != null) {
-                Log.d(TAG, "[playNext] Requesting ViewModel to play next song ID: $nextId")
-                // We need to add a method to the callback interface for this
-                // For now, we'll use onNextRequested which should trigger next song in ViewModel
-                viewModelActionCallback?.onNextRequested()
+            val nextSong = SongRepository.getSongById(nextId)
+            if (nextSong != null) {
+                Log.d(TAG, "[playNext] Playing next song: ${nextSong.title}")
+                play(nextSong, null, null)
             } else {
-                Log.w(TAG, "[playNext] Next song ID: $nextId but no callback available to play it")
+                Log.w(TAG, "[playNext] Next song ID $nextId found in queue but song details missing")
             }
+        } else {
+            Log.d(TAG, "[playNext] No next song in queue")
         }
     }
 
@@ -955,16 +923,19 @@ class MusicService : Service() {
             return
         }
 
-        if (currentQueueSongIds.isEmpty() || currentIndex <= 0) {
-            Log.w(TAG, "No queue or at first song")
-            return
-        }
+        val currentId = currentSong?.id ?: return
+        val prevId = QueueRepository.getPreviousSongId(currentId)
 
-        val prevIndex = currentIndex - 1
-        val prevId = currentQueueSongIds.getOrNull(prevIndex)
         if (prevId != null) {
-            // Would need song lookup - this is handled by ViewModel
-            Log.d(TAG, "[playPrevious] Previous song ID: $prevId")
+            val prevSong = SongRepository.getSongById(prevId)
+            if (prevSong != null) {
+                Log.d(TAG, "[playPrevious] Playing previous song: ${prevSong.title}")
+                play(prevSong, null, null)
+            } else {
+                Log.w(TAG, "[playPrevious] Previous song ID $prevId found in queue but song details missing")
+            }
+        } else {
+            Log.d(TAG, "[playPrevious] No previous song in queue")
         }
     }
 
@@ -1273,25 +1244,5 @@ class MusicService : Service() {
 
         player?.release()
         player = null
-
-        //  stateCallback = null
-        viewModelActionCallback = null
-    }
-
-    /**
-     * Get next song ID from queue
-     */
-    private fun getNextSongId(): Long? {
-        if (currentQueueSongIds.isEmpty() || currentIndex < 0) {
-            return null
-        }
-
-        val nextIndex = if (currentIndex < currentQueueSongIds.size - 1) {
-            currentIndex + 1
-        } else {
-            0 // Loop back to first
-        }
-
-        return currentQueueSongIds.getOrNull(nextIndex)
     }
 }

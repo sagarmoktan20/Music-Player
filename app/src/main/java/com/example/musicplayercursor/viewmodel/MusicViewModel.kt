@@ -22,6 +22,8 @@ import com.example.musicplayercursor.repository.MusicRepository
 import com.example.musicplayercursor.repository.PlayCountRepository
 import com.example.musicplayercursor.repository.LastPlayedRepository
 import com.example.musicplayercursor.repository.PlaylistRepository
+import com.example.musicplayercursor.repository.QueueRepository
+import com.example.musicplayercursor.repository.SongRepository
 import com.example.musicplayercursor.service.MusicService
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -56,7 +58,7 @@ class MusicViewModel: ViewModel() {
     
     // Command Queue to handle actions when service is not yet bound
     private sealed interface ServiceCommand {
-        class Play(val song: Song, val queue: List<Long>, val source: String?) : ServiceCommand
+        class Play(val song: Song, val queue: List<Long>, val source: String?, val startPosition: Long = 0L) : ServiceCommand
         object TogglePlayPause : ServiceCommand
         class SeekTo(val position: Long) : ServiceCommand
         class SetLooping(val isLooping: Boolean) : ServiceCommand
@@ -64,14 +66,10 @@ class MusicViewModel: ViewModel() {
     
     private val commandQueue = mutableListOf<ServiceCommand>()
     
-    init {
-        LastPlayedRepository.init(android.app.Application()) // Static initialization
-        PlayCountRepository.init(android.app.Application()) // Static initialization
-    }
-    
-    // Playback queue context (ids of songs in the active context order)
-    private var currentQueueSongIds: List<Long> = emptyList()
-    private var currentQueueSource: String? = null // e.g., "all", "favourites", or playlistId
+//    init {
+//        LastPlayedRepository.init(android.app.Application()) // Static initialization
+//        PlayCountRepository.init(android.app.Application()) // Static initialization
+//    }
     
     private val _uiState = MutableStateFlow(MusicUiState())
     val uiState: StateFlow<MusicUiState> = _uiState
@@ -81,21 +79,6 @@ class MusicViewModel: ViewModel() {
     
     // Debounce mechanism to avoid multiple rapid reloads
     private var reloadJob: Job? = null
-    
-    // Callback for MusicViewModel to handle notification actions
-    private var viewModelActionCallback: ViewModelActionCallback? = null
-
-    interface ViewModelActionCallback {
-        fun onPlayPauseRequested()
-        fun onNextRequested()
-        fun onPreviousRequested()
-        fun onNextSongRequested(nextSongId: Long)
-    }
-
-    fun setViewModelActionCallback(callback: ViewModelActionCallback?) {
-        viewModelActionCallback = callback
-        Log.d(TAG, "[setViewModelActionCallback] Callback set: ${callback != null}")
-    }
     
     fun setMusicService(service: MusicService?) {
         musicService = service
@@ -110,8 +93,8 @@ class MusicViewModel: ViewModel() {
                     commandQueue.forEach { command ->
                         when (command) {
                             is ServiceCommand.Play -> {
-                                Log.d("FirstPlay", "[setMusicService] Executing queued PLAY command for ${command.song.title}. Queue size: ${command.queue.size}")
-                                service.play(command.song, command.queue, command.source)
+                                Log.d("FirstPlay", "[setMusicService] Executing queued PLAY command for ${command.song.title}. Queue size: ${command.queue.size}, StartPos: ${command.startPosition}")
+                                service.play(command.song, command.queue, command.source, command.startPosition)
                             }
                             is ServiceCommand.TogglePlayPause -> {
                                 Log.d("FirstPlay", "[setMusicService] Executing queued TogglePlayPause")
@@ -126,42 +109,6 @@ class MusicViewModel: ViewModel() {
             }
         }
 
-        // Set callback so MusicService can forward actions to this ViewModel
-        service?.setViewModelActionCallback(object : MusicService.ViewModelActionCallback {
-            override fun onPlayPauseRequested() {
-                Log.d(TAG, "[ViewModelActionCallback] Play/Pause requested from notification")
-                togglePlayPause()
-            }
-
-            override fun onNextRequested() {
-                Log.d(TAG, "[ViewModelActionCallback] Next requested from notification")
-                applicationContext?.let { ctx ->
-                    playNextSong(ctx)
-                }
-            }
-
-            override fun onPreviousRequested() {
-                Log.d(TAG, "[ViewModelActionCallback] Previous requested from notification")
-                applicationContext?.let { ctx ->
-                    playPreviousSong(ctx)
-                }
-            }
-
-            override fun onNextSongRequested(nextSongId: Long) {
-                Log.d(TAG, "[ViewModelActionCallback] Next song requested with ID: $nextSongId")
-                applicationContext?.let { ctx ->
-                    val nextSong = _uiState.value.songs.find { it.id == nextSongId }
-                    if (nextSong != null) {
-                        play(ctx, nextSong)
-                    } else {
-                        Log.w(TAG, "[ViewModelActionCallback] Next song with ID $nextSongId not found")
-                        // Fallback to playNextSong which will find the next song
-                        playNextSong(ctx)
-                    }
-                }
-            }
-        })
-        
         // Observe MusicService playback state
         serviceStateObserverJob?.cancel()
         if (service != null) {
@@ -216,16 +163,19 @@ class MusicViewModel: ViewModel() {
         }
 
         // Initialize repositories
-        LastPlayedRepository.init(context)
-        PlayCountRepository.init(context)
-        CurrentSongRepository.init(context) // ADD THIS
+        val appContext = context
+        LastPlayedRepository.init(appContext)
+        PlayCountRepository.init(appContext)
+        CurrentSongRepository.init(appContext)
+        SongRepository.init(appContext)
         
         viewModelScope.launch {
             Log.d("FirstPlay", "loadSongs: Starting async loading")
-            favouritesRepository = FavouritesRepository(context)
-            playlistRepository = PlaylistRepository(context)
-            val repo = MusicRepository(context.contentResolver)
-            val loadedSongs = repo.loadAudio()
+            favouritesRepository = FavouritesRepository(appContext)
+            playlistRepository = PlaylistRepository(appContext)
+            
+            val loadedSongs = SongRepository.getAllSongs()
+            
             Log.d("FirstPlay", "loadSongs: Loaded ${loadedSongs.size} songs")
             val favouriteIds = favouritesRepository?.getFavouriteSongIds() ?: emptySet()
             val playCounts = PlayCountRepository.getAllPlayCounts()
@@ -274,36 +224,33 @@ class MusicViewModel: ViewModel() {
             // Restore playback if there's a restored song
             if (restoredCurrentSong != null && !savedIsReceiverMode) {
                 // Ensure queue is populated if empty, so we can play/navigate
-                if (currentQueueSongIds.isEmpty()) {
-                    currentQueueSongIds = songsWithFavouritesAndCounts.map { it.id }
-                    currentQueueSource = "all"
-                    Log.d("FirstPlay", "loadSongs: Populated queue with ${currentQueueSongIds.size} songs")
+                val currentQueue = QueueRepository.queue.value
+                val queueToRestore = if (currentQueue.isEmpty()) {
+                     val allSongsQueue = songsWithFavouritesAndCounts.map { it.id }
+                     Log.d("FirstPlay", "loadSongs: Populated queue with ${allSongsQueue.size} songs")
+                     allSongsQueue
+                } else {
+                    currentQueue
                 }
 
-                if (musicService != null) {
-                    Log.d("FirstPlay", "loadSongs: Service ready, restoring immediately")
-                    // Restore song in service immediately
-                    musicService?.play(restoredCurrentSong, currentQueueSongIds, currentQueueSource)
-                    if (savedPosition > 0) {
-                        musicService?.seekTo(savedPosition)
-                    }
-                    if (!savedIsPlaying) {
-                        musicService?.togglePlayPause()
-                    }
-                } else {
-                    // Queue commands for when service connects
-                    Log.d("FirstPlay", "[loadSongs] Service not ready, queuing restore commands for: ${restoredCurrentSong.title}")
-                    synchronized(commandQueue) {
-                        commandQueue.add(ServiceCommand.Play(restoredCurrentSong, currentQueueSongIds, currentQueueSource))
-                        if (savedPosition > 0) {
-                            commandQueue.add(ServiceCommand.SeekTo(savedPosition))
-                        }
-                        if (!savedIsPlaying) {
-                            commandQueue.add(ServiceCommand.TogglePlayPause)
-                        }
-                        Log.d("FirstPlay", "loadSongs: Queued commands. Queue size: ${commandQueue.size}")
-                    }
-                }
+//                if (musicService != null) {
+//                    Log.d("FirstPlay", "loadSongs: Service ready, restoring immediately")
+//                    // Restore song in service immediately
+//                    musicService?.play(restoredCurrentSong, queueToRestore, "all", savedPosition)
+//                    if (!savedIsPlaying) {
+//                        musicService?.togglePlayPause()
+//                    }
+//                } else {
+//                    // Queue commands for when service connects
+//                    Log.d("FirstPlay", "[loadSongs] Service not ready, queuing restore commands for: ${restoredCurrentSong.title}")
+//                    synchronized(commandQueue) {
+//                        commandQueue.add(ServiceCommand.Play(restoredCurrentSong, queueToRestore, "all", savedPosition))
+//                        if (!savedIsPlaying) {
+//                            commandQueue.add(ServiceCommand.TogglePlayPause)
+//                        }
+//                        Log.d("FirstPlay", "loadSongs: Queued commands. Queue size: ${commandQueue.size}")
+//                    }
+//                }
             }
         }
     }
@@ -312,7 +259,7 @@ class MusicViewModel: ViewModel() {
     fun loadPlaylists(context: Context) {
         viewModelScope.launch {
             if (playlistRepository == null) {
-                playlistRepository = PlaylistRepository(context)
+                playlistRepository = PlaylistRepository(context.applicationContext)
             }
             val playlists = playlistRepository?.getAllPlaylists() ?: emptyList()
             _uiState.value = _uiState.value.copy(playlists = playlists)
@@ -322,7 +269,7 @@ class MusicViewModel: ViewModel() {
     fun createPlaylist(context: Context, name: String) {
         viewModelScope.launch {
             if (playlistRepository == null) {
-                playlistRepository = PlaylistRepository(context)
+                playlistRepository = PlaylistRepository(context.applicationContext)
             }
             playlistRepository?.addPlaylist(name)
             val playlists = playlistRepository?.getAllPlaylists() ?: emptyList()
@@ -333,7 +280,7 @@ class MusicViewModel: ViewModel() {
     fun deletePlaylist(context: Context, playlistId: String) {
         viewModelScope.launch {
             if (playlistRepository == null) {
-                playlistRepository = PlaylistRepository(context)
+                playlistRepository = PlaylistRepository(context.applicationContext)
             }
             playlistRepository?.deletePlaylist(playlistId)
             val playlists = playlistRepository?.getAllPlaylists() ?: emptyList()
@@ -368,11 +315,16 @@ class MusicViewModel: ViewModel() {
 
     fun play(context: Context, song: Song) {
         Log.d("FirstPlay", "MusicViewModel: play() called for ${song.title}")
-        // If no queue is set, default to "all songs" order
-        if (currentQueueSongIds.isEmpty()) {
-            currentQueueSongIds = _uiState.value.songs.map { it.id }
-            currentQueueSource = "all"
-            Log.d("FirstPlay", "MusicViewModel: play() Populated empty queue with ${_uiState.value.songs.size} songs")
+        
+        // Use QueueRepository to get current queue
+        val currentQueue = QueueRepository.queue.value
+        // If queue is empty in Repo, populate it with all songs
+        val queueToUse = if (currentQueue.isEmpty()) {
+             val allIds = _uiState.value.songs.map { it.id }
+             Log.d("FirstPlay", "MusicViewModel: play() Populated empty queue with ${allIds.size} songs")
+             allIds
+        } else {
+             currentQueue
         }
         
         // Exit selection mode if active
@@ -408,11 +360,11 @@ class MusicViewModel: ViewModel() {
         
         // Delegate to MusicService or queue if not ready
         if (musicService != null) {
-            musicService?.play(songWithStatus, currentQueueSongIds, currentQueueSource)
+            musicService?.play(songWithStatus, queueToUse, "all")
         } else {
             Log.d(TAG, "[play] Service not ready, queuing play command for: ${song.title}")
             synchronized(commandQueue) {
-                commandQueue.add(ServiceCommand.Play(songWithStatus, currentQueueSongIds, currentQueueSource))
+                commandQueue.add(ServiceCommand.Play(songWithStatus, queueToUse, "all"))
             }
         }
     }
@@ -423,10 +375,9 @@ class MusicViewModel: ViewModel() {
         startSongId: Long,
         source: String?
     ) {
-        // Set queue context (if provided)
+        // Set queue in repository if provided
         if (queueSongIds != null) {
-            currentQueueSongIds = queueSongIds
-            currentQueueSource = source
+            QueueRepository.setQueue(queueSongIds)
         }
         // Resolve Song from current songs list
         val song = _uiState.value.songs.find { it.id == startSongId } ?: return
@@ -445,42 +396,18 @@ class MusicViewModel: ViewModel() {
     }
 
     fun playNextSong(context: Context) {
-        val currentSong = _uiState.value.current ?: return
-        val ids = currentQueueSongIds.ifEmpty { _uiState.value.songs.map { it.id } }
-        val currentIndex = ids.indexOf(currentSong.id)
-        
-        // Loop back to first song if at end of queue
-        val nextIndex = if (currentIndex >= 0 && currentIndex < ids.size - 1) {
-            currentIndex + 1
-        } else if (currentIndex >= 0 && currentIndex == ids.size - 1) {
-            Log.d(TAG, "[playNextSong] Reached end of queue, looping back to first song")
-            0
+        if (musicService != null) {
+            musicService?.playNext()
         } else {
-            Log.d(TAG, "[playNextSong] Current song not in queue, playing first song")
-            0
-        }
-        
-        val nextId = ids.getOrNull(nextIndex)
-        if (nextId != null) {
-            val nextSong = _uiState.value.songs.find { it.id == nextId }
-            if (nextSong != null) {
-                play(context, nextSong)
-            } else {
-                Log.w(TAG, "[playNextSong] Next song with id $nextId not found in songs list")
-            }
+            Log.d(TAG, "[playNextSong] Service not ready")
         }
     }
 
     fun playPreviousSong(context: Context) {
-        val currentSong = _uiState.value.current ?: return
-        val ids = currentQueueSongIds.ifEmpty { _uiState.value.songs.map { it.id } }
-        val currentIndex = ids.indexOf(currentSong.id)
-        if (currentIndex > 0) {
-            val prevId = ids[currentIndex - 1]
-            val previousSong = _uiState.value.songs.find { it.id == prevId }
-            if (previousSong != null) {
-                play(context, previousSong)
-            }
+        if (musicService != null) {
+            musicService?.playPrevious()
+        } else {
+            Log.d(TAG, "[playPreviousSong] Service not ready")
         }
     }
 

@@ -101,7 +101,7 @@ fun MusicScreen(
 	val hasPermission by permissionViewModel.hasAudioPermission.collectAsStateWithLifecycle()
 	var showConnectBottomSheet by remember { mutableStateOf(false) }
 	var showQRDialog by remember { mutableStateOf(false) } // ADD THIS
-	
+
 	LaunchedEffect(Unit) {
 		permissionViewModel.refreshPermissionStatus(context)
 	}
@@ -112,6 +112,7 @@ fun MusicScreen(
 		}
 	}
 
+
 	var showTrackScreen by remember { mutableStateOf(false) }
 	var showPlaylistFolderList by remember { mutableStateOf(false) }
 	var selectedPlaylistId by remember { mutableStateOf<String?>(null) }
@@ -121,7 +122,7 @@ fun MusicScreen(
 	var showMenu by remember { mutableStateOf(false) }
 	var showBroadcastDialog by remember { mutableStateOf(false) }
 	var showBroadcastScreen by remember { mutableStateOf(false) }
-	
+
 	val broadcastState by broadcastViewModel.broadcastState.collectAsStateWithLifecycle()
 	// Auto-open TrackScreen when receiver connects
 
@@ -136,17 +137,17 @@ fun MusicScreen(
 			showBroadcastScreen = true
 		}
 	}
-	
+
 	// Handle back button in selection mode
 	BackHandler(enabled = uiState.isSelectionMode && !showPlaylistFolderList && selectedPlaylistId == null) {
 		viewModel.exitSelectionMode()
 	}
-	
+
 	// Handle back button for playlist folder list
 	BackHandler(enabled = showPlaylistFolderList) {
 		showPlaylistFolderList = false
 	}
-	
+
 	// Handle back button for playlist songs screen
 	BackHandler(enabled = selectedPlaylistId != null) {
 		if (uiState.isSelectionMode) {
@@ -157,7 +158,7 @@ fun MusicScreen(
 			selectedPlaylistId = null
 		}
 	}
-	
+
 	// Handle back button for search screen
 	BackHandler(enabled = showSearchScreen) {
 		showSearchScreen = false
@@ -347,7 +348,7 @@ fun MusicScreen(
 					onPrevious = { if (!isReceiverMode) viewModel.playPreviousSong(context) },
 					onNext = { if (!isReceiverMode) viewModel.playNextSong(context) },
 					onSeek = { position -> if (!isReceiverMode) viewModel.seekTo(position) },
-					onToggleFavourite = { 
+					onToggleFavourite = {
 						if (!isReceiverMode && uiState.current != null) {
 							// Use the current song from the latest state
 							viewModel.toggleFavourite(context, uiState.current!!)
@@ -426,7 +427,7 @@ fun MusicScreen(
 							style = MaterialTheme.typography.titleLarge
 						)
 					}
-					
+
 					// Search icon and Menu icon on the right
 					Row(
 						horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -439,7 +440,7 @@ fun MusicScreen(
 								contentDescription = "Search"
 							)
 						}
-						
+
 						// Three-dot menu icon
 						Box {
 							IconButton(onClick = { showMenu = true }) {
@@ -448,7 +449,7 @@ fun MusicScreen(
 									contentDescription = "Menu"
 								)
 							}
-							
+
 							// Dropdown menu
 							DropdownMenu(
 								expanded = showMenu,
@@ -489,7 +490,7 @@ fun MusicScreen(
 						}
 					}
 				}
-				
+
 				// Show BroadcastScreen content when broadcasting and showBroadcastScreen is true, otherwise show tabs and pager
 				if (broadcastState.isBroadcasting && showBroadcastScreen) {
 					BroadcastScreen(
@@ -609,7 +610,9 @@ fun MusicScreen(
 			}
 		}
 	}
-	
+
+
+
 	// Broadcast dialog
 	if (showBroadcastDialog) {
 		BroadcastDialog(
@@ -617,7 +620,7 @@ fun MusicScreen(
 			onDismiss = { showBroadcastDialog = false }
 		)
 	}
-	
+
 	// Connect bottom sheet
 	if (showConnectBottomSheet) {
 		BackHandler(onBack = { showConnectBottomSheet = false })
@@ -629,7 +632,7 @@ fun MusicScreen(
 			}
 		)
 	}
-	
+
 	// Delete confirmation dialog
 	if (showDeleteDialog) {
 		DeleteConfirmationDialog(
@@ -702,7 +705,7 @@ private fun SongRow(
 		isCurrentlyPlaying -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f) // Lighter highlight for current song
 		else -> Color.Transparent
 	}
-	
+
 	Column(
 		modifier = Modifier
 			.fillMaxWidth()

@@ -84,7 +84,7 @@ class MainActivity : ComponentActivity() {
         setContent {
 
             MusicPlayercursorTheme {
-                val viewModel: MusicViewModel = MusicViewModel()
+                val viewModel: MusicViewModel = viewModel()
                 val permissionViewModel: PermissionViewModel = viewModel()
                 val broadcastViewModel: BroadcastViewModel = viewModel()
                 val connectViewModel: ConnectViewModel = viewModel()
@@ -175,13 +175,13 @@ class MainActivity : ComponentActivity() {
                     Log.d("DIALOG_DEBUG", "Dialog queue is empty, no dialog shown")
                 }
 
-                    MusicScreen(
+                        MusicScreen(
                         viewModel = viewModel,
                         permissionViewModel = permissionViewModel,
                         broadcastViewModel = broadcastViewModel,
                         connectViewModel = connectViewModel,
-                        onRequestSongs = { viewModel.loadSongs(this) },
-                        onPlay = { viewModel.play(this, it) },
+                        onRequestSongs = { viewModel.loadSongs(applicationContext) },
+                        onPlay = { viewModel.play(applicationContext, it) },
                         onToggle = { viewModel.togglePlayPause() }
                     )
 
@@ -205,4 +205,3 @@ fun Activity.openAppSettings() {
         Uri.fromParts("package", packageName, null)
     ).also(::startActivity)
 }
-
