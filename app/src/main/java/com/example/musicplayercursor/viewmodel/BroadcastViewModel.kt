@@ -167,9 +167,6 @@ class BroadcastViewModel : ViewModel() {
         Log.d(TAG, "[BroadcastState] Changed: isBroadcasting=${oldState.isBroadcasting} -> ${_broadcastState.value.isBroadcasting}")
         Log.d(TAG, "[BroadcastState] serverIP=${_broadcastState.value.serverIP}, token=${_broadcastState.value.token}")
         
-        // Set callback IMMEDIATELY — service is already running
-        setPlaybackStateCallback(context)
-        
         // Start polling for client count
         startClientCountPolling(context)
         Log.i(TAG, "<<< [startBroadcast] Success: Broadcast started")
@@ -180,47 +177,7 @@ class BroadcastViewModel : ViewModel() {
      */
 
 
-    private fun setPlaybackStateCallback(context: Context) {
-        Log.d(TAG, ">>> [setPlaybackStateCallback] Entry")
-        if (musicService == null) {
-            Log.e(TAG, "!!! [setPlaybackStateCallback] Error: FATAL: musicService is NULL — cannot set playback callback!")
-            return
-        }
-
-        Log.d(TAG, "[setPlaybackStateCallback] musicService is READY")
-        val playbackState = musicService?.playbackState?.value
-        val currentSong = playbackState?.currentSong
-        val currentPosition = playbackState?.currentPosition ?: 0L
-        val duration = playbackState?.duration ?: 0L
-        val isPlaying = playbackState?.isPlaying ?: false
-        Log.d(TAG, "[setPlaybackStateCallback] Current playback state: song=${currentSong?.title}, position=${currentPosition}ms, duration=${duration}ms, isPlaying=$isPlaying")
-
-        val callback = object : BroadcastService.PlaybackStateCallback {
-            override fun getCurrentSong(): Song? {
-                val song = musicService?.playbackState?.value?.currentSong
-                Log.d(TAG, "[PlaybackStateCallback.getCurrentSong] Called: song=${song?.title} (id=${song?.id})")
-                return song
-            }
-            override fun getCurrentPosition(): Long {
-                val pos = musicService?.playbackState?.value?.currentPosition ?: 0L
-                Log.d(TAG, "[PlaybackStateCallback.getCurrentPosition] Called: position=$pos ms")
-                return pos
-            }
-            override fun getDuration(): Long {
-                val dur = musicService?.playbackState?.value?.duration ?: 0L
-                Log.d(TAG, "[PlaybackStateCallback.getDuration] Called: duration=$dur ms")
-                return dur
-            }
-            override fun isPlaying(): Boolean {
-                val playing = musicService?.playbackState?.value?.isPlaying ?: false
-                Log.d(TAG, "[PlaybackStateCallback.isPlaying] Called: isPlaying=$playing")
-                return playing
-            }
-        }
-
-        BroadcastService.setGlobalPlaybackStateCallback(callback)
-        Log.d(TAG, "<<< [setPlaybackStateCallback] Success: Global playback callback SET")
-    }
+    
 //    private fun setPlaybackStateCallback(context: Context) {
 //        if (musicViewModel == null) {
 //            Log.e(TAG, "musicViewModel is null — cannot set callback")
@@ -313,9 +270,7 @@ class BroadcastViewModel : ViewModel() {
             serviceBound = false
         }
         
-        // Clear global callback
-        BroadcastService.setGlobalPlaybackStateCallback(null)
-        Log.d(TAG, "[onCleared] Global playback callback cleared")
+        
         Log.d(TAG, "<<< [onCleared] Success: ViewModel cleared")
     }
 }

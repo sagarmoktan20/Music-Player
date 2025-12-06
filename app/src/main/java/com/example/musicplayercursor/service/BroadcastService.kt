@@ -63,6 +63,8 @@ import io.ktor.utils.io.ByteWriteChannel
 import io.ktor.utils.io.close
 import io.ktor.utils.io.jvm.javaio.copyTo
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onEach
 import java.io.FileInputStream
 import java.io.OutputStream
 import java.nio.channels.ClosedChannelException
@@ -81,12 +83,6 @@ class BroadcastService : Service() {
         const val EXTRA_TOKEN = "token"
         const val EXTRA_SERVER_IP = "server_ip"
 
-        private var globalCallback: PlaybackStateCallback? = null
-        fun setGlobalPlaybackStateCallback(callback: PlaybackStateCallback?) {
-            Log.d(TAG, "[setGlobalPlaybackStateCallback] Setting callback: ${callback != null}")
-            globalCallback = callback
-        }
-        fun getGlobalPlaybackStateCallback() = globalCallback
     }
 
     private var server: NettyApplicationEngine? = null
@@ -98,20 +94,17 @@ class BroadcastService : Service() {
     // Add this as a class-level variable to track persistent stream state
     private val persistentStreamClients = mutableMapOf<String, Pair<Long, Long>>() // clientId -> (currentSongId, lastPosition)
 
-    interface PlaybackStateCallback {
-        fun getCurrentSong(): Song?
-        fun getCurrentPosition(): Long
-        fun getDuration(): Long
-        fun isPlaying(): Boolean
-    }
-
-    private fun getPlaybackStateCallback() = globalCallback
+    private var latestPlaybackState: com.example.musicplayercursor.service.PlaybackState = com.example.musicplayercursor.service.PlaybackState()
+    private var playbackObserverJob: Job? = null
 
     override fun onCreate() {
         Log.d(TAG, ">>> [onCreate] Entry")
         super.onCreate()
         createNotificationChannel()
         Log.d(TAG, "[onCreate] Notification channel created")
+        playbackObserverJob = com.example.musicplayercursor.repository.PlaybackRepository.state
+            .onEach { latestPlaybackState = it }
+            .launchIn(serverScope)
         Log.d(TAG, "<<< [onCreate] Success: BroadcastService created")
     }
 
@@ -186,9 +179,9 @@ class BroadcastService : Service() {
                     }
                     Log.d(TAG, "[HTTP GET /song] Token validated successfully")
 
-                    val song = getPlaybackStateCallback()?.getCurrentSong()
+                    val song = latestPlaybackState.currentSong
                     if (song == null) {
-                        Log.w(TAG, "⚠️ [HTTP GET /song] No song playing, callback=${getPlaybackStateCallback() != null}")
+                        Log.w(TAG, "⚠️ [HTTP GET /song] No song playing, callback=false")
                         return@get call.respond(HttpStatusCode.NotFound, "No song playing")
                     }
                     Log.d(TAG, "[HTTP GET /song] Streaming song: ${song.title} by ${song.artist}")
@@ -234,10 +227,10 @@ class BroadcastService : Service() {
                             call.response.header(HttpHeaders.AcceptRanges, "bytes")
                             call.response.header(HttpHeaders.ContentType, "audio/mpeg")
                             // Informational headers for debugging/clients (not used by ExoPlayer)
-                            getPlaybackStateCallback()?.let { cb ->
-                                val pos = cb.getCurrentPosition()
-                                val dur = cb.getDuration()
-                                val playing = cb.isPlaying()
+                            run {
+                                val pos = latestPlaybackState.currentPosition
+                                val dur = latestPlaybackState.duration
+                                val playing = latestPlaybackState.isPlaying
                                 call.response.header("X-Broadcaster-Position-Ms", pos.toString())
                                 call.response.header("X-Broadcaster-Duration-Ms", dur.toString())
                                 call.response.header("X-Broadcaster-IsPlaying", playing.toString())
@@ -342,8 +335,7 @@ class BroadcastService : Service() {
                                 
                                 try {
                     while (true) { // Keep connection alive
-                        val callback = getPlaybackStateCallback()
-                        val currentSong = callback?.getCurrentSong()
+                        val currentSong = latestPlaybackState.currentSong
                         
                         if (currentSong == null) {
                             Log.d(TAG, "[HTTP GET /stream] No song playing, waiting...")
@@ -431,21 +423,14 @@ class BroadcastService : Service() {
                         }
                         Log.d(TAG, "[HTTP GET /current] Token validated successfully")
 
-                        val callback = getPlaybackStateCallback()
-                        if (callback == null) {
-                            Log.w(TAG, "⚠️ [HTTP GET /current] Callback not ready yet")
-                            return@get call.respond(HttpStatusCode.ServiceUnavailable, "Not ready")
-                        }
-
-                        val song = callback.getCurrentSong()
+                        val song = latestPlaybackState.currentSong
                         if (song == null) {
                             Log.d(TAG, "[HTTP GET /current] No song playing")
                             return@get call.respond(HttpStatusCode.NoContent)
                         }
-
-                        val position = callback.getCurrentPosition()
-                        val duration = callback.getDuration()
-                        val isPlaying = callback.isPlaying()
+                        val position = latestPlaybackState.currentPosition
+                        val duration = latestPlaybackState.duration
+                        val isPlaying = latestPlaybackState.isPlaying
                         val serverTimestamp = System.currentTimeMillis()
                         
                         Log.d(TAG, "[HTTP GET /current] Song: ${song.title} by ${song.artist}")
@@ -600,25 +585,16 @@ class BroadcastService : Service() {
                     try {
                         Log.d(TAG, "[startSyncJob] Loop iteration #$loopIteration, connected clients: ${connectedClients.size}")
 
-                        val callback = getPlaybackStateCallback()
-                        if (callback == null) {
-                            Log.w(TAG, "⚠️ [startSyncJob] Callback not ready, skipping update (iteration #$loopIteration)")
-                            delay(100)
-                            continue
-                        }
-                        Log.d(TAG, "[startSyncJob] Callback ready, getting playback state...")
-
-                        val song = callback.getCurrentSong()
+                        val song = latestPlaybackState.currentSong
                         if (song == null) {
                             Log.d(TAG, "[startSyncJob] No song playing, skipping update (iteration #$loopIteration)")
                             delay(100)
                             continue
                         }
                         Log.d(TAG, "[startSyncJob] Song found: ${song.title} (id=${song.id})")
-
-                        val position = callback.getCurrentPosition()
-                        val duration = callback.getDuration()
-                        val isPlaying = callback.isPlaying()
+                        val position = latestPlaybackState.currentPosition
+                        val duration = latestPlaybackState.duration
+                        val isPlaying = latestPlaybackState.isPlaying
                         val serverTimestamp = System.currentTimeMillis()
                         Log.d(TAG, "[startSyncJob] Playback state: songId=${song.id}, position=${position}ms, duration=${duration}ms, isPlaying=$isPlaying, timestamp=$serverTimestamp")
 
@@ -764,11 +740,10 @@ class BroadcastService : Service() {
         super.onDestroy()
         stopBroadcast()
         serverScope.cancel()
+        playbackObserverJob?.cancel()
         Log.d(TAG, "[onDestroy] Server scope cancelled")
         Log.d(TAG, "<<< [onDestroy] Success: Service destroyed")
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 }
-
-

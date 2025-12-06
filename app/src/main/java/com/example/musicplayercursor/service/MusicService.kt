@@ -23,6 +23,7 @@ import com.example.musicplayercursor.MainActivity
 import com.example.musicplayercursor.R
 import com.example.musicplayercursor.model.Song
 import com.example.musicplayercursor.repository.CurrentSongRepository
+import com.example.musicplayercursor.repository.PlaybackRepository
 import com.example.musicplayercursor.repository.LastPlayedRepository
 import com.example.musicplayercursor.repository.PlayCountRepository
 import com.example.musicplayercursor.repository.SongRepository
@@ -358,7 +359,7 @@ class MusicService : Service() {
     }
 
     private fun updatePlaybackState() {
-        _playbackState.value = PlaybackState(
+        val state = PlaybackState(
             currentSong = currentSong,
             isPlaying = player?.isPlaying ?: false,
             currentPosition = player?.currentPosition ?: 0L,
@@ -367,6 +368,8 @@ class MusicService : Service() {
             receiverStreamUrl = receiverStreamUrl,
             isLooping = isLooping
         )
+        _playbackState.value = state
+        PlaybackRepository.set(state)
     }
 
     private fun startProgressUpdates() {
