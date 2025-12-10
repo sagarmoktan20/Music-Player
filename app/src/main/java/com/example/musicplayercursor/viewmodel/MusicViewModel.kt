@@ -43,7 +43,12 @@ data class MusicUiState(
     val selectedSongs: Set<Long> = emptySet(),
     val isSelectionMode: Boolean = false,
     val playlists: List<Playlist> = emptyList(),
-    val isLooping: Boolean = false
+    val isLooping: Boolean = false,
+    val showTrackScreen: Boolean = false,
+    val showPlaylistFolderList: Boolean = false,
+    val selectedPlaylistId: String? = null,
+    val openedDefaultFolder: String? = null,
+    val showSearchScreen: Boolean = false
 )
 class MusicViewModel: ViewModel() {
 
@@ -66,10 +71,9 @@ class MusicViewModel: ViewModel() {
     
     private val commandQueue = mutableListOf<ServiceCommand>()
     
-//    init {
-//        LastPlayedRepository.init(android.app.Application()) // Static initialization
-//        PlayCountRepository.init(android.app.Application()) // Static initialization
-//    }
+    init {
+        // Repositories will be initialized in loadSongs with proper context
+    }
     
     private val _uiState = MutableStateFlow(MusicUiState())
     val uiState: StateFlow<MusicUiState> = _uiState
@@ -163,11 +167,19 @@ class MusicViewModel: ViewModel() {
         }
 
         // Initialize repositories
-        val appContext = context
+        val appContext = context.applicationContext
         LastPlayedRepository.init(appContext)
         PlayCountRepository.init(appContext)
         CurrentSongRepository.init(appContext)
-        SongRepository.init(appContext)
+        // Force reload songs since we likely just got permissions
+        // SongRepository.init() would skip if already initialized by Service (which runs before permissions)
+        Log.d("FirstPlay", "Calling SongRepository.loadSongs...")
+        try {
+            SongRepository.loadSongs(appContext)
+            Log.d("FirstPlay", "Returned from SongRepository.loadSongs")
+        } catch (e: Exception) {
+            Log.e("FirstPlay", "Exception calling SongRepository.loadSongs", e)
+        }
         
         viewModelScope.launch {
             Log.d("FirstPlay", "loadSongs: Starting async loading")
@@ -500,7 +512,12 @@ class MusicViewModel: ViewModel() {
             selectedSongs = currentState.selectedSongs,
             isSelectionMode = currentState.isSelectionMode,
             playlists = currentState.playlists,
-            isLooping = currentState.isLooping
+            isLooping = currentState.isLooping,
+            showTrackScreen = currentState.showTrackScreen,
+            showPlaylistFolderList = currentState.showPlaylistFolderList,
+            selectedPlaylistId = currentState.selectedPlaylistId,
+            openedDefaultFolder = currentState.openedDefaultFolder,
+            showSearchScreen = currentState.showSearchScreen
         )
         
         Log.d(TAG, "[toggleFavourite] State updated, new current favourite: ${_uiState.value.current?.isFavourite}")
@@ -772,6 +789,42 @@ class MusicViewModel: ViewModel() {
     
     fun getFavouriteSongs(): List<Song> {
         return _uiState.value.songs.filter { it.isFavourite }
+    }
+
+    fun openTrackScreen() {
+        _uiState.value = _uiState.value.copy(showTrackScreen = true)
+    }
+
+    fun closeTrackScreen() {
+        _uiState.value = _uiState.value.copy(showTrackScreen = false)
+    }
+
+    fun openPlaylistFolderList() {
+        _uiState.value = _uiState.value.copy(showPlaylistFolderList = true)
+    }
+
+    fun closePlaylistFolderList() {
+        _uiState.value = _uiState.value.copy(showPlaylistFolderList = false)
+    }
+
+    fun openUserPlaylist(id: String) {
+        _uiState.value = _uiState.value.copy(selectedPlaylistId = id)
+    }
+
+    fun closeUserPlaylist() {
+        _uiState.value = _uiState.value.copy(selectedPlaylistId = null)
+    }
+
+    fun openDefaultFolder(folder: String?) {
+        _uiState.value = _uiState.value.copy(openedDefaultFolder = folder)
+    }
+
+    fun showSearch() {
+        _uiState.value = _uiState.value.copy(showSearchScreen = true)
+    }
+
+    fun hideSearch() {
+        _uiState.value = _uiState.value.copy(showSearchScreen = false)
     }
 
     override fun onCleared() {

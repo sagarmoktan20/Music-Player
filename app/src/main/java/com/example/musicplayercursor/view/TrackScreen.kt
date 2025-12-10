@@ -3,6 +3,7 @@ package com.example.musicplayercursor.view
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -65,7 +66,7 @@ fun TrackScreen(
     var seekPosition by remember { mutableFloatStateOf(0f) }
 
     // Smoothly animate the slider position
-    val targetSliderPosition = if (duration > 0) (currentPosition.toFloat() / duration.toFloat()) else 0f
+    val targetSliderPosition = if (duration > 0) (currentPosition.toFloat() / duration.toFloat()).coerceIn(0f, 1f) else 0f
     val animatedSliderPosition by animateFloatAsState(
         targetValue = targetSliderPosition,
         label = "Progress Animation"
@@ -73,247 +74,455 @@ fun TrackScreen(
 
     val sliderPosition = if (isUserSeeking) seekPosition else animatedSliderPosition
 
-    Column(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
-            .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.SpaceEvenly
+            .padding(24.dp)
     ) {
-        // Show "Connected to Broadcast" banner in receiver mode
-        // Show "Connected to Broadcast" banner in receiver mode
-        if (isReceiverMode && isConnectedToBroadcast) {
-            Column(
-                modifier = Modifier.fillMaxWidth()
+        val containerMaxWidth = maxWidth
+        val containerMaxHeight = maxHeight
+        val isLandscape = containerMaxWidth > containerMaxHeight
+        if (isLandscape) {
+            Row(
+                modifier = Modifier.fillMaxSize(),
+                horizontalArrangement = Arrangement.spacedBy(24.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
+                val artSize = if (containerMaxWidth < containerMaxHeight) containerMaxWidth * 0.9f else containerMaxHeight * 0.9f
                 Surface(
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    shape = MaterialTheme.shapes.small,
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 8.dp)
+                        .size(artSize)
+                        .padding(16.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    shadowElevation = 8.dp,
+                    color = MaterialTheme.colorScheme.surfaceVariant
                 ) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.MusicNote,
+                            contentDescription = "Album Art",
+                            modifier = Modifier.size(150.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                        )
+                    }
+                }
+
+                Column(
+                    modifier = Modifier.weight(1f),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Top
+                ) {
+                    if (isReceiverMode && isConnectedToBroadcast) {
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.primaryContainer,
+                                shape = MaterialTheme.shapes.small,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 8.dp)
+                            ) {
+                                Text(
+                                    text = "Connected to Broadcast",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(8.dp)
+                                )
+                            }
+                            Button(
+                                onClick = onDisconnect,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp),
+                                colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.error
+                                )
+                            ) {
+                                Text(
+                                    text = "Disconnect from Broadcast",
+                                    color = MaterialTheme.colorScheme.onError
+                                )
+                            }
+                        }
+                    }
+
                     Text(
-                        text = "Connected to Broadcast",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        text = title,
+                        style = MaterialTheme.typography.headlineMedium,
                         textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(8.dp)
+                            .padding(horizontal = 16.dp)
                     )
-                }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = artist,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                    )
 
-                // Disconnect button
-                 Button(
-                    onClick = onDisconnect,
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp)
+                    ) {
+                        Slider(
+                            value = sliderPosition,
+                            onValueChange = { newValue ->
+                                if (!isReceiverMode) {
+                                    isUserSeeking = true
+                                    seekPosition = newValue
+                                }
+                            },
+                            onValueChangeFinished = {
+                                if (!isReceiverMode) {
+                                    val newPosition = (seekPosition * duration).toLong()
+                                    onSeek(newPosition)
+                                    isUserSeeking = false
+                                }
+                            },
+                            enabled = !isReceiverMode,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = formatTime(if (isUserSeeking) (seekPosition * duration).toLong() else currentPosition),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = formatTime(duration),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        IconButton(
+                            onClick = onToggleLoop,
+                            enabled = !isReceiverMode
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.RepeatOne,
+                                contentDescription = "Loop",
+                                tint = if (isReceiverMode) 
+                                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                                else if (isLooping) 
+                                    MaterialTheme.colorScheme.primary 
+                                else 
+                                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                                modifier = Modifier.size(28.dp)
+                            )
+                        }
+                        IconButton(
+                            onClick = onPrevious,
+                            enabled = !isReceiverMode,
+                            modifier = Modifier.size(48.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.SkipPrevious,
+                                contentDescription = "Previous",
+                                tint = if (isReceiverMode) 
+                                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                                else 
+                                    Color.Unspecified,
+                                modifier = Modifier.size(36.dp)
+                            )
+                        }
+                        FilledIconButton(
+                            onClick = onToggle,
+                            enabled = !isReceiverMode,
+                            modifier = Modifier.size(72.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                contentDescription = if (isPlaying) "Pause" else "Play",
+                                tint = if (isReceiverMode) 
+                                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                                else 
+                                    Color.Unspecified,
+                                modifier = Modifier.size(40.dp)
+                            )
+                        }
+                        IconButton(
+                            onClick = onNext,
+                            enabled = !isReceiverMode,
+                            modifier = Modifier.size(48.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.SkipNext,
+                                contentDescription = "Next",
+                                tint = if (isReceiverMode) 
+                                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                                else 
+                                    Color.Unspecified,
+                                modifier = Modifier.size(36.dp)
+                            )
+                        }
+                        IconButton(
+                            onClick = onToggleFavourite,
+                            enabled = !isReceiverMode
+                        ) {
+                            Icon(
+                                imageVector = if (isFavourite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                                contentDescription = "Favourite",
+                                tint = if (isReceiverMode) 
+                                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                                else if (isFavourite) 
+                                    Color.Red 
+                                else 
+                                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                                modifier = Modifier.size(28.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        } else {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(0.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.SpaceEvenly
+            ) {
+                if (isReceiverMode && isConnectedToBroadcast) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            shape = MaterialTheme.shapes.small,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 8.dp)
+                        ) {
+                            Text(
+                                text = "Connected to Broadcast",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(8.dp)
+                            )
+                        }
+                        Button(
+                            onClick = onDisconnect,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp),
+                            colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.error
+                            )
+                        ) {
+                            Text(
+                                text = "Disconnect from Broadcast",
+                                color = MaterialTheme.colorScheme.onError
+                            )
+                        }
+                    }
+                }
+                Surface(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp),
-                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error
-                    )
+                        .size(300.dp)
+                        .padding(16.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    shadowElevation = 8.dp,
+                    color = MaterialTheme.colorScheme.surfaceVariant
+                ) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.MusicNote,
+                            contentDescription = "Album Art",
+                            modifier = Modifier.size(120.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
-                        text = "Disconnect from Broadcast",
-                        color = MaterialTheme.colorScheme.onError
+                        text = title,
+                        style = MaterialTheme.typography.headlineMedium,
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = artist,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
                     )
                 }
-            }
-        }
-        // 1. Album Art Placeholder
-        Surface(
-            modifier = Modifier
-                .size(300.dp)
-                .padding(16.dp),
-            shape = RoundedCornerShape(16.dp),
-            shadowElevation = 8.dp,
-            color = MaterialTheme.colorScheme.surfaceVariant
-        ) {
-            Box(
-                contentAlignment = Alignment.Center,
-                modifier = Modifier.fillMaxSize()
-            ) {
-                Icon(
-                    imageVector = Icons.Default.MusicNote,
-                    contentDescription = "Album Art",
-                    modifier = Modifier.size(120.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // 2. Track Info
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.headlineMedium,
-                textAlign = TextAlign.Center,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp)
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = artist,
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                textAlign = TextAlign.Center,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp)
-            )
-        }
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        // 3. Progress Bar
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp)
-        ) {
-            Slider(
-                value = sliderPosition,
-                onValueChange = { newValue ->
-                    if (!isReceiverMode) {
-                        isUserSeeking = true
-                        seekPosition = newValue
+                Spacer(modifier = Modifier.height(24.dp))
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp)
+                ) {
+                    Slider(
+                        value = sliderPosition,
+                        onValueChange = { newValue ->
+                            if (!isReceiverMode) {
+                                isUserSeeking = true
+                                seekPosition = newValue
+                            }
+                        },
+                        onValueChangeFinished = {
+                            if (!isReceiverMode) {
+                                val newPosition = (seekPosition * duration).toLong()
+                                onSeek(newPosition)
+                                isUserSeeking = false
+                            }
+                        },
+                        enabled = !isReceiverMode,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = formatTime(if (isUserSeeking) (seekPosition * duration).toLong() else currentPosition),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = formatTime(duration),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
                     }
-                },
-                onValueChangeFinished = {
-                    if (!isReceiverMode) {
-                        val newPosition = (seekPosition * duration).toLong()
-                        onSeek(newPosition)
-                        isUserSeeking = false
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(
+                        onClick = onToggleLoop,
+                        enabled = !isReceiverMode
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.RepeatOne,
+                            contentDescription = "Loop",
+                            tint = if (isReceiverMode) 
+                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                            else if (isLooping) 
+                                MaterialTheme.colorScheme.primary 
+                            else 
+                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                            modifier = Modifier.size(28.dp)
+                        )
                     }
-                },
-                enabled = !isReceiverMode,
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    text = formatTime(if (isUserSeeking) (seekPosition * duration).toLong() else currentPosition),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    text = formatTime(duration),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                    IconButton(
+                        onClick = onPrevious,
+                        enabled = !isReceiverMode,
+                        modifier = Modifier.size(48.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.SkipPrevious,
+                            contentDescription = "Previous",
+                            tint = if (isReceiverMode) 
+                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                            else 
+                                Color.Unspecified,
+                            modifier = Modifier.size(36.dp)
+                        )
+                    }
+                    FilledIconButton(
+                        onClick = onToggle,
+                        enabled = !isReceiverMode,
+                        modifier = Modifier.size(72.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            contentDescription = if (isPlaying) "Pause" else "Play",
+                            tint = if (isReceiverMode) 
+                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                            else 
+                                Color.Unspecified,
+                            modifier = Modifier.size(40.dp)
+                        )
+                    }
+                    IconButton(
+                        onClick = onNext,
+                        enabled = !isReceiverMode,
+                        modifier = Modifier.size(48.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.SkipNext,
+                            contentDescription = "Next",
+                            tint = if (isReceiverMode) 
+                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                            else 
+                                Color.Unspecified,
+                            modifier = Modifier.size(36.dp)
+                        )
+                    }
+                    IconButton(
+                        onClick = onToggleFavourite,
+                        enabled = !isReceiverMode
+                    ) {
+                        Icon(
+                            imageVector = if (isFavourite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                            contentDescription = "Favourite",
+                            tint = if (isReceiverMode) 
+                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                            else if (isFavourite) 
+                                Color.Red 
+                            else 
+                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(16.dp))
             }
         }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // 4. Playback Controls
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            // Loop
-            IconButton(
-                onClick = onToggleLoop,
-                enabled = !isReceiverMode
-            ) {
-                Icon(
-                    imageVector = Icons.Default.RepeatOne,
-                    contentDescription = "Loop",
-                    tint = if (isReceiverMode) 
-                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
-                    else if (isLooping) 
-                        MaterialTheme.colorScheme.primary 
-                    else 
-                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                    modifier = Modifier.size(28.dp)
-                )
-            }
-
-            // Previous
-            IconButton(
-                onClick = onPrevious,
-                enabled = !isReceiverMode,
-                modifier = Modifier.size(48.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.SkipPrevious,
-                    contentDescription = "Previous",
-                    tint = if (isReceiverMode) 
-                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
-                    else 
-                        Color.Unspecified,
-                    modifier = Modifier.size(36.dp)
-                )
-            }
-
-            // Play/Pause (Prominent)
-            FilledIconButton(
-                onClick = onToggle,
-                enabled = !isReceiverMode,
-                modifier = Modifier.size(72.dp)
-            ) {
-                Icon(
-                    imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                    contentDescription = if (isPlaying) "Pause" else "Play",
-                    tint = if (isReceiverMode) 
-                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
-                    else 
-                        Color.Unspecified,
-                    modifier = Modifier.size(40.dp)
-                )
-            }
-
-            // Next
-            IconButton(
-                onClick = onNext,
-                enabled = !isReceiverMode,
-                modifier = Modifier.size(48.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.SkipNext,
-                    contentDescription = "Next",
-                    tint = if (isReceiverMode) 
-                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
-                    else 
-                        Color.Unspecified,
-                    modifier = Modifier.size(36.dp)
-                )
-            }
-
-            // Favourite
-            IconButton(
-                onClick = onToggleFavourite,
-                enabled = !isReceiverMode
-            ) {
-                Icon(
-                    imageVector = if (isFavourite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                    contentDescription = "Favourite",
-                    tint = if (isReceiverMode) 
-                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
-                    else if (isFavourite) 
-                        Color.Red 
-                    else 
-                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                    modifier = Modifier.size(28.dp)
-                )
-            }
-        }
-        Spacer(modifier = Modifier.height(16.dp))
     }
 }
 

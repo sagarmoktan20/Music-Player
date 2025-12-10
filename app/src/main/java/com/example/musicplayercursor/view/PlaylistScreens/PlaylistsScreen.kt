@@ -66,22 +66,17 @@ private data class PlaylistFolderUi(
         onCreatePlaylist: (String) -> Unit = {},
         onLoadPlaylists: () -> Unit = {},
         onPlaylistClicked: (String) -> Unit = {},
-        onDefaultFolderOpened: (String?) -> Unit = {},
+        openedDefaultFolder: String? = null,
+        onOpenDefaultFolder: (String?) -> Unit = {},
         onDeletePlaylist: (String) -> Unit = {}
     ) {
         val context = LocalContext.current
         var showCreateDialog by remember { mutableStateOf(false) }
-        var opened by remember { mutableStateOf<String?>(null) }
         
         // Playlist selection mode state (separate from song selection mode)
         var isPlaylistSelectionMode by remember { mutableStateOf(false) }
         var selectedPlaylistIds by remember { mutableStateOf<Set<String>>(emptySet()) }
         var showDeletePlaylistDialog by remember { mutableStateOf(false) }
-        
-        // Notify parent when default folder open state changes
-        LaunchedEffect(opened) {
-            onDefaultFolderOpened(opened)
-        }
         
         // Load playlists when screen is shown
         LaunchedEffect(Unit) {
@@ -105,14 +100,14 @@ private data class PlaylistFolderUi(
         ))
         
         // Back handler for playlist selection mode
-        BackHandler(enabled = isPlaylistSelectionMode && opened == null) {
+        BackHandler(enabled = isPlaylistSelectionMode && openedDefaultFolder == null) {
             isPlaylistSelectionMode = false
             selectedPlaylistIds = emptySet()
         }
 
-        when (opened) {
+        when (openedDefaultFolder) {
             "Recently added" -> {
-                BackHandler { opened = null }
+                BackHandler { onOpenDefaultFolder(null) }
                 RecentlyAdded(
                     songs = songs,
                     isSelectionMode = isSelectionMode,
@@ -123,7 +118,7 @@ private data class PlaylistFolderUi(
                 )
             }
             "Most played" -> {
-                BackHandler { opened = null }
+                BackHandler { onOpenDefaultFolder(null) }
                 MostPlayed(
                     songs = songs,
                     isSelectionMode = isSelectionMode,
@@ -134,7 +129,7 @@ private data class PlaylistFolderUi(
                 )
             }
             "Recently played" -> {
-                BackHandler { opened = null }
+                BackHandler { onOpenDefaultFolder(null) }
                 RecentlyPlayed(
                     songs = songs,
                     isSelectionMode = isSelectionMode,
@@ -145,7 +140,7 @@ private data class PlaylistFolderUi(
                 )
             }
             "Favourites" ->{
-                BackHandler { opened = null }
+                BackHandler { onOpenDefaultFolder(null) }
                 FavouritesScreen(
                     songs = songs,
                     isSelectionMode = isSelectionMode,
@@ -199,7 +194,7 @@ private data class PlaylistFolderUi(
                                                 onPlaylistClicked(folder.id)
                                             } else {
                                                 // Default folder
-                                                opened = folder.title
+                                                onOpenDefaultFolder(folder.title)
                                             }
                                         }
                                     },
